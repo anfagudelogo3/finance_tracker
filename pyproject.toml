@@ -1,0 +1,17 @@
+[project]
+name = "finance-tracker"
+version = "0.1.0"
+description = "WhatsApp-based personal finance tracker"
+requires-python = ">=3.12"
+dependencies = [
+    "openai>=1.0.0",
+    "psycopg2-binary>=2.9.0",
+    "twilio>=9.10.4",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.2.0",
+    "pytest>=8.0.0",
+    "python-dotenv>=1.2.2",
+]
