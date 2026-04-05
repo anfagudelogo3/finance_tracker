@@ -1,12 +1,14 @@
 import base64
 import json
 import logging
+from datetime import datetime
 from urllib.parse import parse_qs
 
 from config import ALLOWED_PHONE_NUMBERS
 from webhook import verify_signature, extract_message
-from parser import parse_expense
-from database import save_message, save_expense
+from parser import parse_expense, is_report_request, parse_report_request
+from database import save_message, save_expense, get_expenses
+from reporting import format_report
 from whatsapp import send_message, format_confirmation
 
 logger = logging.getLogger(__name__)
@@ -73,21 +75,42 @@ def _handle_message(event):
     )
     logger.info("Message saved with id=%d", message_id)
 
-    # Parse expense via LLM
-    expense = parse_expense(message["text"])
-    logger.info(
-        "Expense parsed: amount=%s category=%s confidence=%s",
-        expense.get("amount"),
-        expense.get("category"),
-        expense.get("confidence"),
-    )
+    now = datetime.now().isoformat()
 
-    # Save expense linked to message
-    expense_id = save_expense(message_id, expense)
-    logger.info("Expense saved with id=%d", expense_id)
+    # Report branch
+    if is_report_request(message["text"]):
+        logger.info("Report request detected from %s", message["phone"])
+        date_range = parse_report_request(message["text"], now)
+        logger.info(
+            "Report date range: %s to %s",
+            date_range["min_date"], date_range["max_date"],
+        )
+        expenses = get_expenses(
+            message["phone"], date_range["min_date"], date_range["max_date"]
+        )
+        logger.info("Fetched %d expense(s) for report", len(expenses))
+        report = format_report(expenses, date_range["min_date"], date_range["max_date"])
+        message_sid = send_message(message["phone"], report)
+        logger.info("Report sent, Twilio SID: %s", message_sid)
+        return {"statusCode": 200, "body": ""}
+
+    # Expense branch
+    expenses = parse_expense(message["text"])
+    logger.info("Parsed %d expense(s) from message id=%d", len(expenses), message_id)
+
+    # Save each expense linked to message
+    for expense in expenses:
+        expense_id = save_expense(message_id, expense)
+        logger.info(
+            "Expense saved: id=%d amount=%s category=%s confidence=%s",
+            expense_id,
+            expense.get("amount"),
+            expense.get("category"),
+            expense.get("confidence"),
+        )
 
     # Send confirmation
-    confirmation = format_confirmation(expense)
+    confirmation = format_confirmation(expenses)
     message_sid = send_message(message["phone"], confirmation)
     logger.info("Confirmation sent, Twilio SID: %s", message_sid)
 

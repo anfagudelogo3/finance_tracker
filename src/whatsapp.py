@@ -20,15 +20,33 @@ def send_message(to: str, text: str) -> str:
     return message.sid
 
 
-def format_confirmation(expense: dict) -> str:
+def format_confirmation(expenses: list[dict]) -> str:
     """Build a human-friendly confirmation message in Spanish."""
-    amount = f"{expense['amount']:,.0f}".replace(",", ".")
-    category = expense.get("category", "otro")
-    date = expense.get("date", "hoy")
+    if len(expenses) == 1:
+        expense = expenses[0]
+        currency = expense.get("currency", "COP")
+        amount = f"{expense['amount']:,.0f}".replace(",", ".")
+        category = expense.get("category", "otro")
+        expense_date = expense.get("date", "hoy")
+        msg = f"✅ Registré {currency} {amount} en {category} para {expense_date}"
+        if expense.get("payment_method"):
+            msg += f" ({expense['payment_method']})"
+        return msg
 
-    msg = f"✅ Registré COP {amount} en {category} para {date}"
+    # Multiple expenses: bullet list + total if same currency
+    lines = [f"✅ Registré {len(expenses)} gastos:"]
+    totals: dict[str, float] = {}
+    for expense in expenses:
+        currency = expense.get("currency", "COP")
+        amount = expense["amount"]
+        category = expense.get("category", "otro")
+        formatted = f"{amount:,.0f}".replace(",", ".")
+        lines.append(f"  • {currency} {formatted} en {category}")
+        totals[currency] = totals.get(currency, 0) + amount
 
-    if expense.get("payment_method"):
-        msg += f" ({expense['payment_method']})"
+    if len(totals) == 1:
+        currency, total = next(iter(totals.items()))
+        formatted_total = f"{total:,.0f}".replace(",", ".")
+        lines.append(f"Total: {currency} {formatted_total}")
 
-    return msg
+    return "\n".join(lines)
