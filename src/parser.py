@@ -2,6 +2,7 @@ import json
 import logging
 import unicodedata
 from datetime import date
+from difflib import get_close_matches
 
 from openai import OpenAI
 
@@ -89,13 +90,34 @@ def _estimate_confidence(parsed: dict) -> float:
     return round(score, 2)
 
 
-_REPORT_KEYWORDS = [
-    "reporte", "resumen", "informe",
-    "cuanto gaste", "cuanto llevo", "analisis",
-    "mis gastos", "gastos del", "gastos de",
-    "report","summary", "how much did I spend",
-    "my expenses","expenses from","analisis of my spending"
+# Single-word triggers eligible for fuzzy matching
+_REPORT_KEYWORDS_SINGLE = [
+    # Spanish
+    "reporte", "resumen", "informe", "analisis", "estadisticas", "estadistica",
+    "balance", "historial", "desglose", "gastos",
+    # English
+    "report", "summary", "breakdown", "spending", "expenses", "analytics",
 ]
+
+# Multi-word phrases: exact substring match only (fuzzy on phrases risks false positives)
+_REPORT_KEYWORDS_PHRASE = [
+    # Spanish — questions
+    "cuanto gaste", "cuanto llevo", "cuanto he gastado", "cuanto va",
+    "en que gaste", "en que he gastado", "como voy", "como van mis",
+    # Spanish — possessives
+    "mis gastos", "mis finanzas", "mi resumen", "mi reporte", "mi balance",
+    # Spanish — scoped
+    "gastos del", "gastos de", "gastos en", "gasto del", "gasto de",
+    "resumen del", "resumen de", "informe del", "informe de",
+    # Spanish — time expressions that imply a report
+    "esta semana gaste", "este mes gaste",
+    # English
+    "how much did i spend", "how much have i spent", "what did i spend",
+    "my expenses", "my spending", "expenses from", "spending this",
+    "show me my", "give me a",
+]
+
+_FUZZY_CUTOFF = 0.8
 
 
 def _normalize(text: str) -> str:
@@ -104,9 +126,29 @@ def _normalize(text: str) -> str:
 
 
 def is_report_request(text: str) -> bool:
-    """Return True if the message is asking for a spending report."""
+    """Return True if the message is asking for a spending report.
+
+    Two-pass strategy:
+    1. Exact substring match against all keywords (free, fast).
+    2. If no match, fuzzy word-level match against single-word triggers using
+       difflib.get_close_matches at cutoff=0.8 (stdlib, no extra dependencies).
+    """
     normalized = _normalize(text)
-    return any(kw in normalized for kw in _REPORT_KEYWORDS)
+
+    # Pass 1: exact match on single words and phrases
+    all_keywords = _REPORT_KEYWORDS_SINGLE + _REPORT_KEYWORDS_PHRASE
+    if any(kw in normalized for kw in all_keywords):
+        logger.debug("Report request detected via exact match")
+        return True
+
+    # Pass 2: fuzzy match each token against single-word triggers only
+    tokens = normalized.split()
+    for token in tokens:
+        if get_close_matches(token, _REPORT_KEYWORDS_SINGLE, n=1, cutoff=_FUZZY_CUTOFF):
+            logger.debug("Report request detected via fuzzy match on token '%s'", token)
+            return True
+
+    return False
 
 
 def parse_report_request(text: str, current_datetime: str) -> dict:
