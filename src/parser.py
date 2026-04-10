@@ -8,7 +8,14 @@ from difflib import get_close_matches
 
 from openai import OpenAI
 
-from config import OPENAI_API_KEY
+from config import (
+    OPENAI_API_KEY,
+    OPENAI_TEXT_MODEL,
+    OPENAI_VISION_MODEL,
+    OPENAI_AUDIO_MODEL,
+    OPENAI_AUDIO_LANGUAGE,
+    FUZZY_MATCH_CUTOFF,
+)
 
 logger = logging.getLogger(__name__)
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -62,7 +69,7 @@ def parse_expense(text: str) -> list[dict]:
     """Send the user's message to the LLM and return a list of structured expense data."""
     logger.info("Calling OpenAI to parse: %s", text)
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model=OPENAI_TEXT_MODEL,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": text},
@@ -102,9 +109,9 @@ def transcribe_audio(audio_bytes: bytes, filename: str = "audio.ogg") -> str:
     audio_file = io.BytesIO(audio_bytes)
     audio_file.name = filename  # OpenAI SDK uses the name to detect the format
     transcript = client.audio.transcriptions.create(
-        model="whisper-1",
+        model=OPENAI_AUDIO_MODEL,
         file=audio_file,
-        language="es",  # hint: most messages will be Spanish; Whisper still handles English
+        language=OPENAI_AUDIO_LANGUAGE,
     )
     logger.info("Whisper transcript: %s", transcript.text)
     return transcript.text
@@ -138,7 +145,7 @@ def parse_expense_from_image(
         )
 
     response = client.chat.completions.create(
-        model="gpt-4o",
+        model=OPENAI_VISION_MODEL,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
@@ -156,6 +163,27 @@ def parse_expense_from_image(
         item["confidence"] = _estimate_confidence(item)
 
     return parsed_list
+
+
+_EXCEL_KEYWORDS = [
+    # Explicit format names
+    "excel", "xlsx", "spreadsheet",
+    # Spanish — spreadsheet variants
+    "hoja de calculo", "hoja de cálculo",
+    "hoja calculo", "hoja calculo",
+    "hojas de calculo", "hojas de cálculo",
+    # Spanish export/download verbs
+    "exportar", "exportame", "exporta",
+    "descargar", "descarga", "descargame",
+]
+
+
+def is_excel_request(text: str) -> bool:
+    """Return True if the user is asking for an Excel export."""
+    normalized = _normalize(text)
+    return any(kw in normalized for kw in _EXCEL_KEYWORDS)
+
+
 _REPORT_KEYWORDS_SINGLE = [
     # Spanish
     "reporte", "resumen", "informe", "analisis", "estadisticas", "estadistica",
@@ -182,7 +210,6 @@ _REPORT_KEYWORDS_PHRASE = [
     "show me my", "give me a",
 ]
 
-_FUZZY_CUTOFF = 0.8
 
 
 def _normalize(text: str) -> str:
@@ -209,7 +236,7 @@ def is_report_request(text: str) -> bool:
     # Pass 2: fuzzy match each token against single-word triggers only
     tokens = normalized.split()
     for token in tokens:
-        if get_close_matches(token, _REPORT_KEYWORDS_SINGLE, n=1, cutoff=_FUZZY_CUTOFF):
+        if get_close_matches(token, _REPORT_KEYWORDS_SINGLE, n=1, cutoff=FUZZY_MATCH_CUTOFF):
             logger.debug("Report request detected via fuzzy match on token '%s'", token)
             return True
 
@@ -244,7 +271,7 @@ Rules:
 
     logger.info("Calling OpenAI to extract report date range from: %s", text)
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model=OPENAI_TEXT_MODEL,
         messages=[
             {"role": "system", "content": prompt},
             {"role": "user", "content": text},

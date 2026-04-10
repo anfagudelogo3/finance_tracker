@@ -60,7 +60,7 @@ def get_expenses(phone_number: str, min_date: str, max_date: str) -> list[dict]:
     """Return all expenses for a user within the given date range (inclusive)."""
     query = """
         SELECT e.amount, e.currency, e.category, e.expense_date,
-               e.payment_method, e.merchant, e.description
+               e.payment_method, e.merchant, e.description, e.source
         FROM expenses e
         JOIN messages m ON e.message_id = m.id
         WHERE m.phone_number = %(phone_number)s

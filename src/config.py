@@ -17,3 +17,19 @@ S3_BUCKET_NAME = os.environ["S3_BUCKET_NAME"]
 
 # Webhook
 WEBHOOK_URL = os.environ["WEBHOOK_URL"]  # exact URL configured in Twilio sandbox settings
+
+# OpenAI models
+OPENAI_TEXT_MODEL = "gpt-4o-mini"
+OPENAI_VISION_MODEL = "gpt-4o"
+OPENAI_AUDIO_MODEL = "whisper-1"
+OPENAI_AUDIO_LANGUAGE = "es"
+
+# S3
+PRESIGNED_URL_EXPIRY_SECONDS = 60
+
+# Parser
+FUZZY_MATCH_CUTOFF = 0.8
+
+# Reply messages
+MSG_ERROR = "Ocurrió un error inesperado. Por favor intenta de nuevo."
+MSG_EMPTY_EXPENSE = "No entendí ese mensaje. Intenta describir el gasto con monto y categoría."

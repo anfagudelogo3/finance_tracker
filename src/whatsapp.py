@@ -20,6 +20,19 @@ def send_message(to: str, text: str) -> str:
     return message.sid
 
 
+def send_document(to: str, media_url: str, filename: str) -> str:
+    """Send a WhatsApp document (file) via Twilio. Returns the message SID."""
+    logger.info("Sending document '%s' to %s", filename, to)
+    message = _client.messages.create(
+        from_=TWILIO_WHATSAPP_NUMBER,
+        media_url=[media_url],
+        body=filename,
+        to=f"whatsapp:{to}",
+    )
+    logger.debug("Twilio document message created with SID: %s", message.sid)
+    return message.sid
+
+
 def format_confirmation(expenses: list[dict]) -> str:
     """Build a human-friendly confirmation message in Spanish."""
     if len(expenses) == 1:
