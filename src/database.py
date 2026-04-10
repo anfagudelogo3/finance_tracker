@@ -37,15 +37,16 @@ def save_expense(message_id: int, expense: dict) -> int:
     query = """
         INSERT INTO expenses (
             message_id, amount, currency, category, expense_date,
-            payment_method, merchant, description, confidence
+            payment_method, merchant, description, confidence, source
         ) VALUES (
             %(message_id)s, %(amount)s, %(currency)s, %(category)s, %(date)s,
-            %(payment_method)s, %(merchant)s, %(description)s, %(confidence)s
+            %(payment_method)s, %(merchant)s, %(description)s, %(confidence)s, %(source)s
         )
         RETURNING id;
     """
     expense["message_id"] = message_id
     expense.setdefault("currency", "COP")
+    expense.setdefault("source", "text")
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(query, expense)
@@ -79,3 +80,13 @@ def get_expenses(phone_number: str, min_date: str, max_date: str) -> list[dict]:
                 len(rows), phone_number, min_date, max_date,
             )
             return [dict(row) for row in rows]
+
+
+def update_message_transcript(message_id: int, transcript: str) -> None:
+    """Persist a Whisper transcript on the messages row."""
+    query = "UPDATE messages SET transcript = %(transcript)s WHERE id = %(id)s;"
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, {"transcript": transcript, "id": message_id})
+            conn.commit()
+            logger.debug("Updated transcript for message id=%d", message_id)

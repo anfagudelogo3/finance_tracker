@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS messages (
     whatsapp_message_id     VARCHAR(128) UNIQUE NOT NULL,
     phone_number            VARCHAR(20) NOT NULL,
     raw_text                TEXT NOT NULL,
+    transcript              TEXT,
     created_at              TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -17,6 +18,7 @@ CREATE TABLE IF NOT EXISTS expenses (
     merchant        VARCHAR(100),
     description     TEXT,
     confidence      NUMERIC(3, 2),
+    source          VARCHAR(10) NOT NULL DEFAULT 'text',
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -25,5 +27,7 @@ CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses (expense_date);
 CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses (category);
 CREATE INDEX IF NOT EXISTS idx_messages_phone ON messages (phone_number);
 
--- Migration for existing deployments: add currency column if missing
+-- Migration for existing deployments
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS currency VARCHAR(10) NOT NULL DEFAULT 'COP';
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS source VARCHAR(10) NOT NULL DEFAULT 'text';
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS transcript TEXT;

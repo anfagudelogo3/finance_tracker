@@ -1,3 +1,5 @@
+import base64
+import io
 import json
 import logging
 import unicodedata
@@ -13,7 +15,10 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 SYSTEM_PROMPT = """You are a personal finance assistant that extracts expense data from short text messages in Spanish or English.
 
-Given a user message, extract ALL expenses mentioned and return ONLY a JSON array. Each object in the array represents one expense. If only one expense is mentioned, return an array with one object.
+Given a user message, extract ALL expenses mentioned and return ONLY a JSON object with a single key "expenses" containing an array. Each object in the array represents one expense. If only one expense is mentioned, return an array with one object.
+
+Format:
+{"expenses": [{...}, {...}]}
 
 Each expense object has these fields:
 {
@@ -32,24 +37,24 @@ Rules:
 - payment_method: if mentioned (e.g., "tarjeta", "efectivo", "nequi"), include it. Otherwise null.
 - merchant: if a specific place or brand is mentioned, include it. Otherwise null.
 - description: a short summary of what the expense was.
-- Return ONLY valid JSON. No extra text, no markdown.
+- Return ONLY valid JSON matching the format above. No extra text, no markdown.
 
 Examples:
 Query: "almuerzo 32000"
 Response:
-[{"amount": 32000, "currency": "COP", "category": "comida", "payment_method": null, "merchant": null, "description": "almuerzo"}]
+{"expenses": [{"amount": 32000, "currency": "COP", "category": "comida", "payment_method": null, "merchant": null, "description": "almuerzo"}]}
 
 Query: "uber 14 lukas"
 Response:
-[{"amount": 14000, "currency": "COP", "category": "transporte", "payment_method": null, "merchant": "Uber", "description": "viaje en Uber"}]
+{"expenses": [{"amount": 14000, "currency": "COP", "category": "transporte", "payment_method": null, "merchant": "Uber", "description": "viaje en Uber"}]}
 
 Query: "mercado 12 mil con tarjeta"
 Response:
-[{"amount": 12000, "currency": "COP", "category": "mercado", "payment_method": "tarjeta", "merchant": null, "description": "compra en el mercado"}]
+{"expenses": [{"amount": 12000, "currency": "COP", "category": "mercado", "payment_method": "tarjeta", "merchant": null, "description": "compra en el mercado"}]}
 
 Query: "almuerzo 20 luca y cine 40 mil"
 Response:
-[{"amount": 20000, "currency": "COP", "category": "comida", "payment_method": null, "merchant": null, "description": "almuerzo"}, {"amount": 40000, "currency": "COP", "category": "entretenimiento", "payment_method": null, "merchant": null, "description": "cine"}]
+{"expenses": [{"amount": 20000, "currency": "COP", "category": "comida", "payment_method": null, "merchant": null, "description": "almuerzo"}, {"amount": 40000, "currency": "COP", "category": "entretenimiento", "payment_method": null, "merchant": null, "description": "cine"}]}
 """
 
 
@@ -63,11 +68,12 @@ def parse_expense(text: str) -> list[dict]:
             {"role": "user", "content": text},
         ],
         temperature=0,
+        response_format={"type": "json_object"},
     )
 
     content = response.choices[0].message.content.strip()
     logger.debug("OpenAI raw response: %s", content)
-    parsed_list = json.loads(content)
+    parsed_list = json.loads(content)["expenses"]
 
     # Attach metadata to each expense
     today = date.today().isoformat()
@@ -90,7 +96,66 @@ def _estimate_confidence(parsed: dict) -> float:
     return round(score, 2)
 
 
-# Single-word triggers eligible for fuzzy matching
+def transcribe_audio(audio_bytes: bytes, filename: str = "audio.ogg") -> str:
+    """Send audio bytes to OpenAI Whisper and return the transcript string."""
+    logger.info("Sending %d bytes to Whisper", len(audio_bytes))
+    audio_file = io.BytesIO(audio_bytes)
+    audio_file.name = filename  # OpenAI SDK uses the name to detect the format
+    transcript = client.audio.transcriptions.create(
+        model="whisper-1",
+        file=audio_file,
+        language="es",  # hint: most messages will be Spanish; Whisper still handles English
+    )
+    logger.info("Whisper transcript: %s", transcript.text)
+    return transcript.text
+
+
+def parse_expense_from_image(
+    image_bytes: bytes,
+    content_type: str,
+    caption: str = "",
+) -> list[dict]:
+    """Extract expenses from an image using GPT-4o vision.
+
+    Args:
+        image_bytes: Raw image bytes.
+        content_type: MIME type (e.g. 'image/jpeg').
+        caption: Optional text the user sent alongside the image.
+
+    Returns:
+        Same list[dict] format as parse_expense.
+    """
+    logger.info("Sending image (%s, %d bytes) to GPT-4o vision", content_type, len(image_bytes))
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    data_url = f"data:{content_type};base64,{image_b64}"
+
+    user_content: list[dict] = [
+        {"type": "image_url", "image_url": {"url": data_url}},
+    ]
+    if caption:
+        user_content.append(
+            {"type": "text", "text": f"Additional context from the user: '{caption}'"}
+        )
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+    content = response.choices[0].message.content.strip()
+    logger.info("GPT-4o vision raw response: %s", content)
+    parsed_list = json.loads(content)["expenses"]
+
+    today = date.today().isoformat()
+    for item in parsed_list:
+        item["date"] = today
+        item["confidence"] = _estimate_confidence(item)
+
+    return parsed_list
 _REPORT_KEYWORDS_SINGLE = [
     # Spanish
     "reporte", "resumen", "informe", "analisis", "estadisticas", "estadistica",

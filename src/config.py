@@ -11,3 +11,9 @@ OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 
 # Database (Neon PostgreSQL)
 DATABASE_URL = os.environ["DATABASE_URL"]
+
+# S3
+S3_BUCKET_NAME = os.environ["S3_BUCKET_NAME"]
+
+# Webhook
+WEBHOOK_URL = os.environ["WEBHOOK_URL"]  # exact URL configured in Twilio sandbox settings
