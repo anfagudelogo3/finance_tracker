@@ -2,6 +2,17 @@
 
 A simple, frictionless personal finance tracking system that uses **WhatsApp as the primary interface**. Send a text message like `almuerzo 32000` and the system parses it with an LLM, stores structured data in PostgreSQL, and sends you a confirmation — all in seconds.
 
+## Documentation
+
+Full documentation lives in [`docs/`](docs/README.md):
+
+- [Architecture](docs/architecture.md) — components, request flow, and module responsibilities
+- [Setup](docs/setup.md) — local development, environment variables, database, tests
+- [User Guide](docs/usage.md) — logging expenses, reports, and Excel exports over WhatsApp
+- [Database](docs/database.md) — schema, columns, indexes, and migrations
+- [Deployment](docs/deployment.md) — AWS Lambda, S3, IAM, and Twilio configuration
+- [Development](docs/development.md) — project layout, testing, conventions, known limitations
+
 ## How It Works
 
 1. **You send a message** on WhatsApp (e.g., `uber 14000`, `mercado 120000 tarjeta`)

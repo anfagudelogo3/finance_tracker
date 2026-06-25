@@ -3,6 +3,7 @@ import json
 import logging
 from datetime import datetime
 from urllib.parse import parse_qs
+from zoneinfo import ZoneInfo
 
 from config import ALLOWED_PHONE_NUMBERS, WEBHOOK_URL, MSG_ERROR, MSG_EMPTY_EXPENSE
 from webhook import verify_signature, extract_message
@@ -99,6 +100,9 @@ def _handle_message(event):
             phone_number=message["phone"],
             raw_text=message["text"],
         )
+        if message_id is None:
+            logger.info("Duplicate message %s — already processed, skipping", message["message_id"])
+            return {"statusCode": 200, "body": ""}
         logger.info("Message saved with id=%d", message_id)
 
         # Store any media attachments to S3 and keep bytes for LLM processing
@@ -107,7 +111,7 @@ def _handle_message(event):
             stored_media = store_all_media(message["phone"], message["message_id"], message["media"])
             logger.info("Stored %d media file(s) to S3", len(stored_media))
 
-        now = datetime.now().isoformat()
+        now = datetime.now(ZoneInfo("America/Bogota")).isoformat()
         msg_type = _get_message_type(message)
         logger.info("Message type: %s", msg_type)
 

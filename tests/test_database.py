@@ -29,6 +29,15 @@ class TestSaveMessage:
         assert result == 1
         mock_cursor.execute.assert_called_once()
 
+    @patch("database.get_connection")
+    def test_returns_none_on_duplicate(self, mock_get_conn):
+        mock_cursor = _mock_connection(mock_get_conn, 1)
+        mock_cursor.fetchone.return_value = None  # ON CONFLICT DO NOTHING returns no row
+
+        result = save_message("wamid.123", "573001234567", "almuerzo 32000")
+
+        assert result is None
+
 
 class TestSaveExpense:
     @patch("database.get_connection")

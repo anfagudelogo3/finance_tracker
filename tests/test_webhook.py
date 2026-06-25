@@ -55,6 +55,7 @@ class TestExtractMessage:
             "phone": "+573001234567",
             "text": "almuerzo 32000",
             "message_id": "SMxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "media": [],
         }
 
     def test_strips_whatsapp_prefix(self):

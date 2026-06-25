@@ -1,4 +1,5 @@
 import logging
+from contextlib import contextmanager
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -8,15 +9,21 @@ from config import DATABASE_URL
 logger = logging.getLogger(__name__)
 
 
+@contextmanager
 def get_connection():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
-def save_message(whatsapp_message_id: str, phone_number: str, raw_text: str) -> int:
-    """Insert a raw WhatsApp message. Returns the new row ID."""
+def save_message(whatsapp_message_id: str, phone_number: str, raw_text: str) -> int | None:
+    """Insert a raw WhatsApp message. Returns the new row ID, or None on duplicate."""
     query = """
         INSERT INTO messages (whatsapp_message_id, phone_number, raw_text)
         VALUES (%(whatsapp_message_id)s, %(phone_number)s, %(raw_text)s)
+        ON CONFLICT (whatsapp_message_id) DO NOTHING
         RETURNING id;
     """
     with get_connection() as conn:
@@ -26,10 +33,13 @@ def save_message(whatsapp_message_id: str, phone_number: str, raw_text: str) -> 
                 "phone_number": phone_number,
                 "raw_text": raw_text,
             })
-            row_id = cur.fetchone()["id"]
+            row = cur.fetchone()
+            if row is None:
+                logger.debug("Duplicate message sid=%s, skipping insert", whatsapp_message_id)
+                return None
             conn.commit()
-            logger.debug("Inserted message id=%d sid=%s", row_id, whatsapp_message_id)
-            return row_id
+            logger.debug("Inserted message id=%d sid=%s", row["id"], whatsapp_message_id)
+            return row["id"]
 
 
 def save_expense(message_id: int, expense: dict) -> int:

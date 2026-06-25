@@ -3,8 +3,9 @@ import io
 import json
 import logging
 import unicodedata
-from datetime import date
+from datetime import date, datetime
 from difflib import get_close_matches
+from zoneinfo import ZoneInfo
 
 from openai import OpenAI
 
@@ -19,6 +20,8 @@ from config import (
 
 logger = logging.getLogger(__name__)
 client = OpenAI(api_key=OPENAI_API_KEY)
+
+_BOGOTA = ZoneInfo("America/Bogota")
 
 SYSTEM_PROMPT = """You are a personal finance assistant that extracts expense data from short text messages in Spanish or English.
 
@@ -83,7 +86,7 @@ def parse_expense(text: str) -> list[dict]:
     parsed_list = json.loads(content)["expenses"]
 
     # Attach metadata to each expense
-    today = date.today().isoformat()
+    today = datetime.now(_BOGOTA).date().isoformat()
     for item in parsed_list:
         item["date"] = today
         item["confidence"] = _estimate_confidence(item)
@@ -157,7 +160,7 @@ def parse_expense_from_image(
     logger.info("GPT-4o vision raw response: %s", content)
     parsed_list = json.loads(content)["expenses"]
 
-    today = date.today().isoformat()
+    today = datetime.now(_BOGOTA).date().isoformat()
     for item in parsed_list:
         item["date"] = today
         item["confidence"] = _estimate_confidence(item)
