@@ -17,6 +17,7 @@ It also understands **voice notes** and **photos of receipts**, and can produce
 | [database.md](database.md) | Full schema, columns, indexes, and migrations |
 | [deployment.md](deployment.md) | Packaging and deploying to AWS Lambda, S3, and Twilio configuration |
 | [development.md](development.md) | Project layout, testing strategy, conventions, and known limitations |
+| [evaluation.md](evaluation.md) | LLM eval framework: programmatic scoring, Phoenix tracing, how to run |
 
 ## At a glance
 

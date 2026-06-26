@@ -1,0 +1,86 @@
+[
+  {
+    "id": "default-no-qualifier",
+    "input": "resumen",
+    "now": "2026-06-25T10:00:00-05:00",
+    "expected": {"min_date": "2026-06-01", "max_date": "2026-06-25"},
+    "notes": "No date qualifier → defaults to first day of current month through today"
+  },
+  {
+    "id": "este-mes",
+    "input": "este mes",
+    "now": "2026-06-25T10:00:00-05:00",
+    "expected": {"min_date": "2026-06-01", "max_date": "2026-06-25"},
+    "notes": "Explicit current month"
+  },
+  {
+    "id": "esta-semana",
+    "input": "esta semana",
+    "now": "2026-06-25T10:00:00-05:00",
+    "expected": {"min_date": "2026-06-22", "max_date": "2026-06-25"},
+    "notes": "June 25 is a Thursday; Monday of that week is June 22"
+  },
+  {
+    "id": "semana-pasada",
+    "input": "la semana pasada",
+    "now": "2026-06-25T10:00:00-05:00",
+    "expected": {"min_date": "2026-06-15", "max_date": "2026-06-21"},
+    "notes": "Previous full Mon–Sun week"
+  },
+  {
+    "id": "mes-pasado",
+    "input": "el mes pasado",
+    "now": "2026-06-25T10:00:00-05:00",
+    "expected": {"min_date": "2026-05-01", "max_date": "2026-05-31"},
+    "notes": "Full prior calendar month"
+  },
+  {
+    "id": "ultimos-7-dias",
+    "input": "últimos 7 días",
+    "now": "2026-06-25T10:00:00-05:00",
+    "expected": {"min_date": "2026-06-18", "max_date": "2026-06-25"},
+    "notes": "Today minus 7 days through today"
+  },
+  {
+    "id": "ultimos-30-dias",
+    "input": "últimos 30 días",
+    "now": "2026-06-25T10:00:00-05:00",
+    "expected": {"min_date": "2026-05-26", "max_date": "2026-06-25"},
+    "notes": "Today minus 30 days through today"
+  },
+  {
+    "id": "month-mayo",
+    "input": "mis gastos de mayo",
+    "now": "2026-06-25T10:00:00-05:00",
+    "expected": {"min_date": "2026-05-01", "max_date": "2026-05-31"},
+    "notes": "Past month by name → full month range"
+  },
+  {
+    "id": "month-abril",
+    "input": "gastos de abril",
+    "now": "2026-06-25T10:00:00-05:00",
+    "expected": {"min_date": "2026-04-01", "max_date": "2026-04-30"},
+    "notes": "Past month by name → full month range"
+  },
+  {
+    "id": "hoy",
+    "input": "cuánto gasté hoy",
+    "now": "2026-06-25T10:00:00-05:00",
+    "expected": {"min_date": "2026-06-25", "max_date": "2026-06-25"},
+    "notes": "Today only"
+  },
+  {
+    "id": "english-this-week",
+    "input": "how much did I spend this week",
+    "now": "2026-06-25T10:00:00-05:00",
+    "expected": {"min_date": "2026-06-22", "max_date": "2026-06-25"},
+    "notes": "English equivalent of esta semana"
+  },
+  {
+    "id": "cuanto-llevo-mes",
+    "input": "cuánto llevo este mes",
+    "now": "2026-06-25T10:00:00-05:00",
+    "expected": {"min_date": "2026-06-01", "max_date": "2026-06-25"},
+    "notes": "Colloquial Spanish for current month spend"
+  }
+]

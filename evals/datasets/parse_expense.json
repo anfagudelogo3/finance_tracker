@@ -1,0 +1,143 @@
+[
+  {
+    "id": "simple-lunch",
+    "input": "almuerzo 32000",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 32000, "currency": "COP", "category": "comida", "payment_method": null}]
+    },
+    "tags": ["text", "single", "simple"]
+  },
+  {
+    "id": "grocery-card",
+    "input": "mercado 85000 tarjeta",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 85000, "currency": "COP", "category": "mercado", "payment_method": "tarjeta"}]
+    },
+    "tags": ["text", "single", "payment-method"]
+  },
+  {
+    "id": "bus-ride",
+    "input": "bus 2900",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 2900, "currency": "COP", "category": "transporte", "payment_method": null}]
+    },
+    "tags": ["text", "single", "simple"]
+  },
+  {
+    "id": "pharmacy",
+    "input": "farmacia 18000",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 18000, "currency": "COP", "category": "salud", "payment_method": null}]
+    },
+    "tags": ["text", "single", "simple"]
+  },
+  {
+    "id": "internet-bill",
+    "input": "internet 89000",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 89000, "currency": "COP", "category": "servicios", "payment_method": null}]
+    },
+    "tags": ["text", "single", "simple"]
+  },
+  {
+    "id": "uber-lukas",
+    "input": "uber 14 lukas",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 14000, "currency": "COP", "category": "transporte", "merchant": "uber"}]
+    },
+    "tags": ["text", "single", "slang", "merchant"]
+  },
+  {
+    "id": "coffee-mil-nequi",
+    "input": "tinto 3 mil nequi",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 3000, "currency": "COP", "category": "comida", "payment_method": "nequi"}]
+    },
+    "tags": ["text", "single", "slang", "payment-method"]
+  },
+  {
+    "id": "grocery-lukas-cash",
+    "input": "mercado 120 lukas efectivo",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 120000, "currency": "COP", "category": "mercado", "payment_method": "efectivo"}]
+    },
+    "tags": ["text", "single", "slang", "payment-method"]
+  },
+  {
+    "id": "pizza-mil",
+    "input": "pizza 35 mil",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 35000, "currency": "COP", "category": "comida", "payment_method": null}]
+    },
+    "tags": ["text", "single", "slang"]
+  },
+  {
+    "id": "netflix-streaming",
+    "input": "netflix 45000",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 45000, "currency": "COP", "category": "entretenimiento", "merchant": "netflix"}]
+    },
+    "tags": ["text", "single", "merchant"]
+  },
+  {
+    "id": "shoes-card",
+    "input": "zapatos 180000 tarjeta",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 180000, "currency": "COP", "category": "ropa", "payment_method": "tarjeta"}]
+    },
+    "tags": ["text", "single", "payment-method"]
+  },
+  {
+    "id": "medical-appointment",
+    "input": "consulta médica 80000",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 80000, "currency": "COP", "category": "salud", "payment_method": null}]
+    },
+    "tags": ["text", "single", "accent"]
+  },
+  {
+    "id": "usd-subscription",
+    "input": "suscripción ChatGPT 20 dólares",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 20, "currency": "USD", "category": "servicios", "merchant": "chatgpt"}]
+    },
+    "tags": ["text", "single", "usd", "merchant"]
+  },
+  {
+    "id": "multi-lunch-cinema",
+    "input": "almuerzo 20 luca y cine 40 mil",
+    "expected": {
+      "count": 2,
+      "expenses": [
+        {"amount": 20000, "currency": "COP", "category": "comida"},
+        {"amount": 40000, "currency": "COP", "category": "entretenimiento"}
+      ]
+    },
+    "tags": ["text", "multi", "slang"]
+  },
+  {
+    "id": "multi-uber-grocery",
+    "input": "uber 15000 y mercado 65000 tarjeta",
+    "expected": {
+      "count": 2,
+      "expenses": [
+        {"amount": 15000, "currency": "COP", "category": "transporte"},
+        {"amount": 65000, "currency": "COP", "category": "mercado", "payment_method": "tarjeta"}
+      ]
+    },
+    "tags": ["text", "multi", "payment-method"]
+  }
+]

@@ -5,6 +5,10 @@ from datetime import datetime
 from urllib.parse import parse_qs
 from zoneinfo import ZoneInfo
 
+# Tracing is set up before parser is imported so OpenAI calls are instrumented.
+from tracing import setup_tracing
+setup_tracing()
+
 from config import ALLOWED_PHONE_NUMBERS, WEBHOOK_URL, MSG_ERROR, MSG_EMPTY_EXPENSE
 from webhook import verify_signature, extract_message
 from parser import (
