@@ -105,11 +105,11 @@ def _handle_message(event):
         logger.warning("Unauthorized sender: %s", message["phone"])
         return {"statusCode": 200, "body": ""}
 
-    # Resolve the user from the verified phone (the LLM never chooses this)
-    user_id = get_or_create_user(message["phone"])
-
     # Save raw message and process — wrapped so any failure sends a friendly reply
     try:
+        # Resolve the user from the verified phone (the LLM never chooses this)
+        user_id = get_or_create_user(message["phone"])
+
         message_id = save_message(
             user_id=user_id,
             whatsapp_message_id=message["message_id"],
