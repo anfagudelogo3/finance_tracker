@@ -1,67 +1,107 @@
 # Database Schema
 
-Finance Tracker uses PostgreSQL (Neon in production). The schema is defined and migrated
-by [`scripts/setup_db.sql`](../scripts/setup_db.sql), which is idempotent and safe to
-re-run.
+Finance Tracker uses PostgreSQL (Neon in production). The schema is defined by
+[`scripts/setup_db.sql`](../scripts/setup_db.sql).
 
-Two tables model the data: every inbound WhatsApp message is stored once in `messages`,
-and the structured expenses extracted from it are stored in `expenses` (one message can
-yield several expenses).
+As of **Phase 0** (multi-agent foundation), the schema is organized around a `users`
+entity. Every row of every table is owned by a user, resolved from the verified WhatsApp
+phone number. Some tables (`incomes`, `budgets`) are created now but only used by agents
+introduced in later phases — see
+[design/agentic-architecture.md](design/agentic-architecture.md).
 
 ```
-messages                              expenses
-─────────────────────────────        ─────────────────────────────
-id              PK                    id              PK
-whatsapp_message_id  UNIQUE           message_id      FK → messages.id
-phone_number                          amount
-raw_text                              currency
-transcript                            category
-created_at                            expense_date
-                                      payment_method
-                                      merchant
-                                      description
-                                      confidence
-                                      source
-                                      created_at
+users ──┬── messages ──── expenses (FK message_id, user_id)
+        │             └── incomes  (FK message_id, user_id)
+        ├── conversation_turns
+        ├── categories
+        └── budgets
 ```
 
-## `messages`
+## `users`
 
-One row per inbound WhatsApp message (the raw event), written by
-[`database.save_message`](../src/database.py).
+One row per person (auto-created on first message; identity comes from the verified
+phone). Written by [`database.get_or_create_user`](../src/database.py).
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `id` | `SERIAL` PK | Internal id, referenced by `expenses.message_id` |
-| `whatsapp_message_id` | `VARCHAR(128)` `UNIQUE NOT NULL` | Twilio `MessageSid`; the uniqueness constraint is the basis for de-duplication |
-| `phone_number` | `VARCHAR(20) NOT NULL` | Sender in E.164, without the `whatsapp:` prefix |
-| `raw_text` | `TEXT NOT NULL` | Original message body (may be empty for media-only messages) |
-| `transcript` | `TEXT` | Whisper transcript for voice notes; `NULL` otherwise. Set by `update_message_transcript` |
-| `created_at` | `TIMESTAMPTZ` | Defaults to `NOW()` |
+| `id` | `SERIAL` PK | Referenced by every other table |
+| `phone` | `VARCHAR(20) UNIQUE NOT NULL` | E.164, no `whatsapp:` prefix |
+| `name` | `VARCHAR(100)` | Optional display name |
+| `prefs` | `JSONB NOT NULL DEFAULT '{}'` | Free-form preferences (used by the Personal agent later) |
+| `created_at` | `TIMESTAMPTZ` | |
 
-## `expenses`
+## `messages`
 
-One row per parsed expense, linked to its source message, written by
-[`database.save_expense`](../src/database.py).
+One row per inbound WhatsApp message (raw audit log).
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | `SERIAL` PK | |
+| `user_id` | `INTEGER NOT NULL` | FK → `users(id)` `ON DELETE CASCADE` |
+| `whatsapp_message_id` | `VARCHAR(128) UNIQUE NOT NULL` | Twilio `MessageSid`; basis for de-duplication |
+| `phone_number` | `VARCHAR(20) NOT NULL` | Sender E.164 |
+| `raw_text` | `TEXT NOT NULL` | Original body (may be empty for media-only) |
+| `transcript` | `TEXT` | Whisper transcript for voice notes |
+| `created_at` | `TIMESTAMPTZ` | |
+
+## `conversation_turns`
+
+Short-term chatbot memory: the recent back-and-forth used to resolve follow-ups like
+*"cámbialo"* → *"¿a cuánto?"* → *"5000"*. Written by
+[`database.save_turn`](../src/database.py), read by `load_recent_turns`.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `SERIAL` PK | |
+| `user_id` | `INTEGER NOT NULL` | FK → `users(id)` `ON DELETE CASCADE` |
+| `role` | `VARCHAR(16) NOT NULL` | `user` or `assistant` |
+| `content` | `TEXT NOT NULL` | The message text |
+| `created_at` | `TIMESTAMPTZ` | Used for the time-window memory query |
+
+How much history is loaded is controlled by `CONVERSATION_MAX_TURNS` (cap) and
+`CONVERSATION_WINDOW_MINUTES` (recency window) in [`config.py`](../src/config.py).
+
+## `categories`
+
+Per-user, customizable categories (categories are **data**, not a hardcoded list). Seeded
+with the defaults from `config.py` when a user is created.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `SERIAL` PK | |
+| `user_id` | `INTEGER NOT NULL` | FK → `users(id)` `ON DELETE CASCADE` |
+| `name` | `VARCHAR(50) NOT NULL` | e.g. `comida` |
+| `kind` | `VARCHAR(16) NOT NULL DEFAULT 'expense'` | `expense` or `income` |
+| `active` | `BOOLEAN NOT NULL DEFAULT TRUE` | Soft-disable instead of delete |
+| | | `UNIQUE (user_id, name, kind)` |
+
+The active expense categories are injected into the parser prompt per request by
+[`database.get_user_categories`](../src/database.py).
+
+## `expenses`
+
+One row per parsed expense.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `SERIAL` PK | |
+| `user_id` | `INTEGER NOT NULL` | FK → `users(id)` |
 | `message_id` | `INTEGER NOT NULL` | FK → `messages(id)` `ON DELETE CASCADE` |
-| `amount` | `NUMERIC(12,2) NOT NULL` | No currency symbol |
-| `currency` | `VARCHAR(10) NOT NULL DEFAULT 'COP'` | ISO-like code (`COP`, `USD`, …) |
-| `category` | `VARCHAR(50) NOT NULL` | One of the fixed categories (see [usage.md](usage.md)) |
-| `expense_date` | `DATE NOT NULL DEFAULT CURRENT_DATE` | The day the expense is attributed to |
+| `amount` | `NUMERIC(12,2) NOT NULL` | |
+| `currency` | `VARCHAR(10) NOT NULL DEFAULT 'COP'` | |
+| `category` | `VARCHAR(50) NOT NULL` | |
+| `expense_date` | `DATE NOT NULL DEFAULT CURRENT_DATE` | |
 | `payment_method` | `VARCHAR(50)` | Nullable |
 | `merchant` | `VARCHAR(100)` | Nullable |
-| `description` | `TEXT` | Short summary |
-| `confidence` | `NUMERIC(3,2)` | Heuristic score in `[0, 1]` (see below) |
-| `source` | `VARCHAR(10) NOT NULL DEFAULT 'text'` | How the expense was captured: `text`, `audio`, or `image` |
-| `created_at` | `TIMESTAMPTZ` | Defaults to `NOW()` |
+| `description` | `TEXT` | |
+| `confidence` | `NUMERIC(3,2)` | Completeness heuristic, see below |
+| `source` | `VARCHAR(10) NOT NULL DEFAULT 'text'` | `text`, `audio`, or `image` |
+| `deleted_at` | `TIMESTAMPTZ` | **Soft delete** — `NULL` means active; reads filter on this |
+| `created_at` | `TIMESTAMPTZ` | |
 
 ### Confidence score
 
-`confidence` is a simple completeness heuristic computed in
+`confidence` is a completeness heuristic in
 [`parser._estimate_confidence`](../src/parser.py), **not** a model probability:
 
 | Condition | Points |
@@ -70,39 +110,73 @@ One row per parsed expense, linked to its source message, written by
 | `category` present and not `otro` | +0.3 |
 | `description` present | +0.2 |
 
-So a fully populated expense scores `1.0`; an `otro`-category expense with an amount and
-description scores `0.7`.
+## `incomes` (table created in Phase 0; agent in Phase 2)
+
+Mirrors `expenses` for money coming in.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `SERIAL` PK | |
+| `user_id` | `INTEGER NOT NULL` | FK → `users(id)` |
+| `message_id` | `INTEGER` | FK → `messages(id)` `ON DELETE SET NULL` |
+| `amount` | `NUMERIC(12,2) NOT NULL` | |
+| `currency` | `VARCHAR(10) NOT NULL DEFAULT 'COP'` | |
+| `category` | `VARCHAR(50) NOT NULL` | |
+| `income_date` | `DATE NOT NULL DEFAULT CURRENT_DATE` | |
+| `source` | `VARCHAR(20) NOT NULL DEFAULT 'manual'` | `manual`, `gmail`, `bank` (future) |
+| `description` | `TEXT` | |
+| `confidence` | `NUMERIC(3,2)` | |
+| `deleted_at` | `TIMESTAMPTZ` | Soft delete |
+| `created_at` | `TIMESTAMPTZ` | |
+
+## `budgets` (table created in Phase 0; agent in Phase 3)
+
+Per-currency budgets, either global or scoped to a category.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `SERIAL` PK | |
+| `user_id` | `INTEGER NOT NULL` | FK → `users(id)` |
+| `scope` | `VARCHAR(20) NOT NULL DEFAULT 'global'` | `global` or `category` |
+| `category` | `VARCHAR(50)` | `NULL` when `scope = 'global'` |
+| `currency` | `VARCHAR(10) NOT NULL DEFAULT 'COP'` | Budgets are **per-currency** |
+| `period` | `VARCHAR(16) NOT NULL DEFAULT 'monthly'` | `monthly` or `weekly` |
+| `amount` | `NUMERIC(12,2) NOT NULL` | The limit |
+| `active` | `BOOLEAN NOT NULL DEFAULT TRUE` | |
+| `created_at` | `TIMESTAMPTZ` | |
 
 ## Indexes
 
-Created by the schema script for the common access patterns (per-user date-range
-queries and category grouping):
-
 | Index | Column(s) |
 |-------|-----------|
+| `idx_messages_user` | `messages(user_id)` |
+| `idx_turns_user_created` | `conversation_turns(user_id, created_at)` |
+| `idx_categories_user` | `categories(user_id, kind)` |
+| `idx_expenses_user` | `expenses(user_id)` |
 | `idx_expenses_message_id` | `expenses(message_id)` |
 | `idx_expenses_date` | `expenses(expense_date)` |
-| `idx_expenses_category` | `expenses(category)` |
-| `idx_messages_phone` | `messages(phone_number)` |
+| `idx_incomes_user` | `incomes(user_id)` |
+| `idx_incomes_date` | `incomes(income_date)` |
+| `idx_budgets_user` | `budgets(user_id)` |
+
+## Reset
+
+Existing data is disposable in this stage. The top of
+[`scripts/setup_db.sql`](../scripts/setup_db.sql) has a commented **RESET** block —
+uncomment the `DROP TABLE … CASCADE` lines and run once to wipe, then run the `CREATE`
+statements.
 
 ## Common query
 
 Reports and Excel exports read through [`database.get_expenses`](../src/database.py),
-which joins the two tables and filters by sender and inclusive date range:
+now scoped by `user_id` and excluding soft-deleted rows:
 
 ```sql
-SELECT e.amount, e.currency, e.category, e.expense_date,
-       e.payment_method, e.merchant, e.description, e.source
-FROM expenses e
-JOIN messages m ON e.message_id = m.id
-WHERE m.phone_number = :phone_number
-  AND e.expense_date BETWEEN :min_date AND :max_date
-ORDER BY e.expense_date, e.category;
+SELECT amount, currency, category, expense_date,
+       payment_method, merchant, description, source
+FROM expenses
+WHERE user_id = :user_id
+  AND deleted_at IS NULL
+  AND expense_date BETWEEN :min_date AND :max_date
+ORDER BY expense_date, category;
 ```
-
-## Migrations
-
-The bottom of [`scripts/setup_db.sql`](../scripts/setup_db.sql) contains additive
-`ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements (`currency`, `source`, `transcript`)
-so that existing deployments can be upgraded by simply re-running the script. When adding
-a new column, follow the same pattern rather than editing the `CREATE TABLE` in place.

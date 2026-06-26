@@ -16,6 +16,7 @@ from config import (
     OPENAI_AUDIO_MODEL,
     OPENAI_AUDIO_LANGUAGE,
     FUZZY_MATCH_CUTOFF,
+    DEFAULT_EXPENSE_CATEGORIES,
 )
 
 logger = logging.getLogger(__name__)
@@ -23,27 +24,34 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 _BOGOTA = ZoneInfo("America/Bogota")
 
-SYSTEM_PROMPT = """You are a personal finance assistant that extracts expense data from short text messages in Spanish or English.
+def _build_system_prompt(categories: list[str] | None = None) -> str:
+    """Build the expense-extraction system prompt with the user's categories injected.
+
+    Categories are data (per-user, customizable) rather than hardcoded, so the prompt is
+    built per request. Falls back to the defaults when none are supplied.
+    """
+    cats = ", ".join(categories) if categories else ", ".join(DEFAULT_EXPENSE_CATEGORIES)
+    return f"""You are a personal finance assistant that extracts expense data from short text messages in Spanish or English.
 
 Given a user message, extract ALL expenses mentioned and return ONLY a JSON object with a single key "expenses" containing an array. Each object in the array represents one expense. If only one expense is mentioned, return an array with one object.
 
 Format:
-{"expenses": [{...}, {...}]}
+{{"expenses": [{{...}}, {{...}}]}}
 
 Each expense object has these fields:
-{
+{{
   "amount": <number>,
   "currency": "<string>",
   "category": "<string>",
   "payment_method": "<string or null>",
   "merchant": "<string or null>",
   "description": "<original text summarized>"
-}
+}}
 
 Rules:
 - amount: the numeric value. No currency symbols.
 - currency: the currency of the amount (e.g., "COP", "USD"). If the currency is not explicitly mentioned, assume "COP".
-- category: infer from context. Use one of: comida, transporte, mercado, salud, entretenimiento, hogar, educacion, ropa, servicios, otro.
+- category: infer from context. Use one of: {cats}.
 - payment_method: if mentioned (e.g., "tarjeta", "efectivo", "nequi"), include it. Otherwise null.
 - merchant: if a specific place or brand is mentioned, include it. Otherwise null.
 - description: a short summary of what the expense was.
@@ -52,29 +60,29 @@ Rules:
 Examples:
 Query: "almuerzo 32000"
 Response:
-{"expenses": [{"amount": 32000, "currency": "COP", "category": "comida", "payment_method": null, "merchant": null, "description": "almuerzo"}]}
+{{"expenses": [{{"amount": 32000, "currency": "COP", "category": "comida", "payment_method": null, "merchant": null, "description": "almuerzo"}}]}}
 
 Query: "uber 14 lukas"
 Response:
-{"expenses": [{"amount": 14000, "currency": "COP", "category": "transporte", "payment_method": null, "merchant": "Uber", "description": "viaje en Uber"}]}
+{{"expenses": [{{"amount": 14000, "currency": "COP", "category": "transporte", "payment_method": null, "merchant": "Uber", "description": "viaje en Uber"}}]}}
 
 Query: "mercado 12 mil con tarjeta"
 Response:
-{"expenses": [{"amount": 12000, "currency": "COP", "category": "mercado", "payment_method": "tarjeta", "merchant": null, "description": "compra en el mercado"}]}
+{{"expenses": [{{"amount": 12000, "currency": "COP", "category": "mercado", "payment_method": "tarjeta", "merchant": null, "description": "compra en el mercado"}}]}}
 
 Query: "almuerzo 20 luca y cine 40 mil"
 Response:
-{"expenses": [{"amount": 20000, "currency": "COP", "category": "comida", "payment_method": null, "merchant": null, "description": "almuerzo"}, {"amount": 40000, "currency": "COP", "category": "entretenimiento", "payment_method": null, "merchant": null, "description": "cine"}]}
+{{"expenses": [{{"amount": 20000, "currency": "COP", "category": "comida", "payment_method": null, "merchant": null, "description": "almuerzo"}}, {{"amount": 40000, "currency": "COP", "category": "entretenimiento", "payment_method": null, "merchant": null, "description": "cine"}}]}}
 """
 
 
-def parse_expense(text: str) -> list[dict]:
+def parse_expense(text: str, categories: list[str] | None = None) -> list[dict]:
     """Send the user's message to the LLM and return a list of structured expense data."""
     logger.info("Calling OpenAI to parse: %s", text)
     response = client.chat.completions.create(
         model=OPENAI_TEXT_MODEL,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": _build_system_prompt(categories)},
             {"role": "user", "content": text},
         ],
         temperature=0,
@@ -124,6 +132,7 @@ def parse_expense_from_image(
     image_bytes: bytes,
     content_type: str,
     caption: str = "",
+    categories: list[str] | None = None,
 ) -> list[dict]:
     """Extract expenses from an image using GPT-4o vision.
 
@@ -131,6 +140,7 @@ def parse_expense_from_image(
         image_bytes: Raw image bytes.
         content_type: MIME type (e.g. 'image/jpeg').
         caption: Optional text the user sent alongside the image.
+        categories: The user's expense categories to inject into the prompt.
 
     Returns:
         Same list[dict] format as parse_expense.
@@ -150,7 +160,7 @@ def parse_expense_from_image(
     response = client.chat.completions.create(
         model=OPENAI_VISION_MODEL,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": _build_system_prompt(categories)},
             {"role": "user", "content": user_content},
         ],
         temperature=0,
