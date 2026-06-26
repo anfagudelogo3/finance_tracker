@@ -19,6 +19,13 @@ It also understands **voice notes** and **photos of receipts**, and can produce
 | [development.md](development.md) | Project layout, testing strategy, conventions, and known limitations |
 | [evaluation.md](evaluation.md) | LLM eval framework: programmatic scoring, Phoenix tracing, how to run |
 
+### Design (where the project is going)
+
+| Document | What it covers |
+|----------|----------------|
+| [design/agentic-architecture.md](design/agentic-architecture.md) | Master plan: multi-agent orchestration, data model, phased roadmap, review cadence |
+| [design/open-challenges.md](design/open-challenges.md) | Deferred capabilities: proactive scheduled alerts, Gmail/bank income |
+
 ## At a glance
 
 ```

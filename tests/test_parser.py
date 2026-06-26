@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from parser import parse_expense, _estimate_confidence
+from parser import parse_expense, _estimate_confidence, _build_system_prompt
 
 
 class TestParseExpense:
@@ -30,6 +30,24 @@ class TestParseExpense:
         assert result[0]["category"] == "comida"
         assert "date" in result[0]
         assert "confidence" in result[0]
+
+    @patch("parser.client")
+    def test_injects_user_categories_into_prompt(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.choices = [
+            MagicMock(message=MagicMock(content=json.dumps({"expenses": [{
+                "amount": 5000, "category": "mascota", "currency": "COP",
+                "payment_method": None, "merchant": None, "description": "croquetas",
+            }]})))
+        ]
+        mock_client.chat.completions.create.return_value = mock_response
+
+        parse_expense("croquetas 5000", categories=["mascota", "comida"])
+
+        # The custom categories must appear in the system prompt sent to the model
+        call = mock_client.chat.completions.create.call_args
+        system_content = call.kwargs["messages"][0]["content"]
+        assert "mascota" in system_content
 
     @patch("parser.client")
     def test_parses_expense_with_payment_method(self, mock_client):
@@ -73,6 +91,21 @@ class TestParseExpense:
         assert result[1]["category"] == "entretenimiento"
         assert "date" in result[0]
         assert "confidence" in result[1]
+
+
+class TestBuildSystemPrompt:
+    def test_uses_provided_categories(self):
+        prompt = _build_system_prompt(["mascota", "viajes"])
+        assert "mascota, viajes" in prompt
+
+    def test_falls_back_to_defaults(self):
+        prompt = _build_system_prompt(None)
+        assert "comida" in prompt and "otro" in prompt
+
+    def test_is_valid_no_brace_artifacts(self):
+        # The f-string JSON examples must render real braces, not f-string escapes
+        prompt = _build_system_prompt(["comida"])
+        assert '{"expenses":' in prompt
 
 
 class TestEstimateConfidence:

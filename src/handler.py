@@ -20,7 +20,15 @@ from parser import (
     parse_report_request
 )
 from excel import create_excel_bytes, upload_and_sign
-from database import save_message, save_expense, get_expenses, update_message_transcript
+from database import (
+    save_message,
+    save_expense,
+    get_expenses,
+    update_message_transcript,
+    get_or_create_user,
+    get_user_categories,
+    save_turn,
+)
 from media import store_all_media
 from reporting import format_report
 from whatsapp import send_message, send_document, format_confirmation
@@ -99,7 +107,11 @@ def _handle_message(event):
 
     # Save raw message and process — wrapped so any failure sends a friendly reply
     try:
+        # Resolve the user from the verified phone (the LLM never chooses this)
+        user_id = get_or_create_user(message["phone"])
+
         message_id = save_message(
+            user_id=user_id,
             whatsapp_message_id=message["message_id"],
             phone_number=message["phone"],
             raw_text=message["text"],
@@ -107,7 +119,13 @@ def _handle_message(event):
         if message_id is None:
             logger.info("Duplicate message %s — already processed, skipping", message["message_id"])
             return {"statusCode": 200, "body": ""}
-        logger.info("Message saved with id=%d", message_id)
+        logger.info("Message saved with id=%d for user=%d", message_id, user_id)
+
+        # Record the inbound turn for short-term conversation memory
+        save_turn(user_id, "user", message["text"] or f"[{_get_message_type(message)}]")
+
+        # Load the user's expense categories to inject into the parser prompt
+        expense_categories = get_user_categories(user_id, kind="expense")
 
         # Store any media attachments to S3 and keep bytes for LLM processing
         stored_media = []
@@ -128,7 +146,7 @@ def _handle_message(event):
                 date_range["min_date"], date_range["max_date"],
             )
             expenses = get_expenses(
-                message["phone"], date_range["min_date"], date_range["max_date"]
+                user_id, date_range["min_date"], date_range["max_date"]
             )
             logger.info("Fetched %d expense(s) for Excel export", len(expenses))
             excel_bytes = create_excel_bytes(expenses)
@@ -138,6 +156,7 @@ def _handle_message(event):
             )
             message_sid = send_document(message["phone"], presigned_url, filename)
             logger.info("Excel sent, Twilio SID: %s", message_sid)
+            save_turn(user_id, "assistant", f"[excel] {filename}")
             return {"statusCode": 200, "body": ""}
 
         # Report branch
@@ -149,12 +168,13 @@ def _handle_message(event):
                 date_range["min_date"], date_range["max_date"],
             )
             expenses = get_expenses(
-                message["phone"], date_range["min_date"], date_range["max_date"]
+                user_id, date_range["min_date"], date_range["max_date"]
             )
             logger.info("Fetched %d expense(s) for report", len(expenses))
             report = format_report(expenses, date_range["min_date"], date_range["max_date"])
             message_sid = send_message(message["phone"], report)
             logger.info("Report sent, Twilio SID: %s", message_sid)
+            save_turn(user_id, "assistant", report)
             return {"statusCode": 200, "body": ""}
 
         # Expense branch — routes by message type
@@ -164,7 +184,7 @@ def _handle_message(event):
             transcript = transcribe_audio(media_item["bytes"], filename=f"audio.{ext}")
             update_message_transcript(message_id, transcript)
             combined_text = f"{transcript} {message['text']}".strip()
-            expenses = parse_expense(combined_text)
+            expenses = parse_expense(combined_text, categories=expense_categories)
             source = "audio"
         elif msg_type == "image":
             media_item = stored_media[0]
@@ -172,10 +192,11 @@ def _handle_message(event):
                 media_item["bytes"],
                 media_item["content_type"],
                 caption=message["text"],
+                categories=expense_categories,
             )
             source = "image"
         else:
-            expenses = parse_expense(message["text"])
+            expenses = parse_expense(message["text"], categories=expense_categories)
             source = "text"
 
         logger.info("Parsed %d expense(s) from message id=%d (source=%s)", len(expenses), message_id, source)
@@ -183,12 +204,13 @@ def _handle_message(event):
         if not expenses:
             logger.info("No expenses parsed from message id=%d, sending fallback reply", message_id)
             send_message(message["phone"], MSG_EMPTY_EXPENSE)
+            save_turn(user_id, "assistant", MSG_EMPTY_EXPENSE)
             return {"statusCode": 200, "body": ""}
 
-        # Save each expense linked to message
+        # Save each expense linked to message and user
         for expense in expenses:
             expense["source"] = source
-            expense_id = save_expense(message_id, expense)
+            expense_id = save_expense(message_id, expense, user_id)
             logger.info(
                 "Expense saved: id=%d amount=%s category=%s confidence=%s source=%s",
                 expense_id,
@@ -202,6 +224,7 @@ def _handle_message(event):
         confirmation = format_confirmation(expenses)
         message_sid = send_message(message["phone"], confirmation)
         logger.info("Confirmation sent, Twilio SID: %s", message_sid)
+        save_turn(user_id, "assistant", confirmation)
 
         return {"statusCode": 200, "body": ""}
 
