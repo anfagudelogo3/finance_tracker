@@ -1,7 +1,8 @@
 import expense_agent
 import income_agent
+import reporting_agent
 from agent_types import AgentRequest, AgentResponse
-from parser import _normalize
+from parser import _normalize, is_report_request
 
 # Phrase-level only, deliberately no fuzzy single-word matching like is_report_request
 # uses: income and expense vocabulary collide on shared stems ("pagué" = I paid, an
@@ -52,10 +53,14 @@ def is_income_request(text: str) -> bool:
 def handle_message(request: AgentRequest) -> AgentResponse:
     """Dispatch to the matching specialist agent.
 
-    Deterministic keyword signal first, mirroring handler.py's excel/report gates —
-    handler.py's is_excel_request/is_report_request still run before this is ever
-    called, so this only ever sees expense-or-income-shaped messages.
+    Deterministic keyword signals only, checked in the same priority order handler.py
+    used to apply inline: report, then income, then the expense default. `is_report_request`
+    is reused unchanged from parser.py (it's also still called directly by handler.py's
+    Excel branch, which stays on the old path — see docs/agent-architecture.md Phase 3).
+    handler.py's is_excel_request still runs before this is ever called.
     """
+    if is_report_request(request.text):
+        return reporting_agent.handle(request)
     if is_income_request(request.text):
         return income_agent.handle(request)
     return expense_agent.handle(request)

@@ -121,7 +121,7 @@ class TestIncomeTextPath:
         assert mock_save_turn.call_count == 2  # inbound + outbound
 
 
-class TestExcelAndReportBypassOrchestrator:
+class TestExcelBypassesOrchestrator:
     @patch("handler.orchestrator")
     @patch("handler.send_document")
     @patch("handler.upload_and_sign")
@@ -162,39 +162,42 @@ class TestExcelAndReportBypassOrchestrator:
         assert result["statusCode"] == 200
         mock_orchestrator.handle_message.assert_not_called()
 
-    @patch("handler.orchestrator")
+
+class TestReportTextPath:
+    """Unlike excel (unchanged, still bypasses the orchestrator), report requests now
+    route through orchestrator.handle_message → reporting_agent, per Phase 3. This
+    exercises the real deterministic date-range path end to end — "resumen de mis
+    gastos" needs no Claude call at all."""
+
+    @patch("reporting_agent.get_expenses")
     @patch("handler.send_message")
-    @patch("handler.get_expenses")
-    @patch("handler.parse_report_request")
     @patch("handler.save_turn")
     @patch("handler.save_message")
     @patch("handler.get_or_create_user")
     @patch("handler.verify_signature")
-    def test_report_request_does_not_reach_orchestrator(
+    def test_report_text_routes_through_orchestrator_to_reporting_agent(
         self,
         mock_verify,
         mock_get_user,
         mock_save_message,
         mock_save_turn,
-        mock_parse_report,
-        mock_get_expenses,
         mock_send_message,
-        mock_orchestrator,
+        mock_get_expenses,
     ):
         mock_verify.return_value = True
         mock_get_user.return_value = 7
         mock_save_message.return_value = 1
-        mock_parse_report.return_value = {
-            "min_date": "2026-08-01",
-            "max_date": "2026-08-14",
-        }
-        mock_get_expenses.return_value = []
+        mock_get_expenses.return_value = [
+            {"amount": 32000, "currency": "COP", "category": "comida"},
+        ]
         mock_send_message.return_value = "SIDxxx"
 
         result = _handle_message(_make_event("resumen de mis gastos"))
 
         assert result["statusCode"] == 200
-        mock_orchestrator.handle_message.assert_not_called()
+        mock_get_expenses.assert_called_once()
+        mock_send_message.assert_called_once()
+        assert mock_save_turn.call_count == 2  # inbound + outbound
 
 
 class TestErrorContract:

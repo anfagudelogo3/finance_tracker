@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # evals/__init__.py bootstraps sys.path and dummy env vars before src imports.
@@ -22,6 +23,7 @@ from tracing import setup_tracing
 from parser import parse_expense, parse_report_request
 from expense_agent import _extract as _extract_expense_claude
 from income_agent import _extract as _extract_income_claude
+from reporting_agent import resolve_date_range
 from config import DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES
 from evals.scoring import score_expense, score_date_range
 
@@ -39,6 +41,12 @@ DATASETS_DIR = Path(__file__).parent / "datasets"
 # claude-haiku-4-5-20251001 run against parse_income.json (n=12): 100% overall,
 # 100% amount, 100% currency, 100% category. Same reasoning as expense_agent — not
 # pinned to 100%, small sample.
+#
+# "reporting_agent" thresholds are set with headroom below the observed run against
+# parse_report_request.json (n=13, including the Claude-fallback case): 100% overall,
+# 100% min_date, 100% max_date — confirming both parse_report_request failures (missing
+# "hoy" rule, unreliable weekday arithmetic for "la semana pasada") are fixed, not just
+# not-regressed. Same small-sample reasoning as expense_agent/income_agent.
 THRESHOLDS: dict[str, dict[str, float]] = {
     "parse_expense": {
         "overall": 0.85,
@@ -54,6 +62,11 @@ THRESHOLDS: dict[str, dict[str, float]] = {
         "overall": 0.90,
         "amount": 0.95,
         "category": 0.90,
+    },
+    "reporting_agent": {
+        "overall": 0.90,
+        "min_date": 0.90,
+        "max_date": 0.90,
     },
     "parse_report_request": {
         "overall": 0.90,
@@ -122,11 +135,14 @@ def _run_income_agent() -> tuple[list[dict], dict]:
     )
 
 
-def _run_parse_report_request() -> tuple[list[dict], dict]:
-    cases = _load_dataset("parse_report_request")
+def _run_date_range_dataset(dataset_name: str, resolve_fn) -> tuple[list[dict], dict]:
+    """Run a parse_report_request-shaped dataset through any function of shape
+    (text: str, now: str) -> dict, and score with score_date_range. Shared by the
+    OpenAI path and the new deterministic+Claude-fallback reporting_agent."""
+    cases = _load_dataset(dataset_name)
     scores = []
     for case in cases:
-        actual = parse_report_request(case["input"], case["now"])
+        actual = resolve_fn(case["input"], case["now"])
         score = score_date_range(actual, case["expected"])
         score["id"] = case["id"]
         scores.append(score)
@@ -143,6 +159,21 @@ def _run_parse_report_request() -> tuple[list[dict], dict]:
         "max_date": max_acc,
     }
     return scores, metrics
+
+
+def _run_parse_report_request() -> tuple[list[dict], dict]:
+    return _run_date_range_dataset("parse_report_request", parse_report_request)
+
+
+def _run_reporting_agent() -> tuple[list[dict], dict]:
+    """reporting_agent's date-range resolution (deterministic rules + Claude fallback
+    for anything they don't cover) against the same dataset — the fix for
+    parse_report_request's known failures (missing "hoy" rule, unreliable LLM weekday
+    arithmetic for "la semana pasada")."""
+    return _run_date_range_dataset(
+        "parse_report_request",
+        lambda text, now_str: resolve_date_range(text, datetime.fromisoformat(now_str)),
+    )
 
 
 _WIDTH = 54
@@ -234,10 +265,20 @@ def main() -> None:
         _print_section("income_agent (Claude)", scores_income, metrics_income)
         if args.check:
             threshold_failures.extend(_check_thresholds("income_agent", metrics_income))
+
+        print(
+            "\nRunning reporting_agent (deterministic + Claude fallback) for parity..."
+        )
+        scores_report_agent, metrics_report_agent = _run_reporting_agent()
+        _print_section("reporting_agent", scores_report_agent, metrics_report_agent)
+        if args.check:
+            threshold_failures.extend(
+                _check_thresholds("reporting_agent", metrics_report_agent)
+            )
     else:
         print(
-            "\nSkipping expense_agent/income_agent (Claude) evals — ANTHROPIC_API_KEY not "
-            "configured. Add it to your .env file to run them."
+            "\nSkipping expense_agent/income_agent/reporting_agent (Claude) evals — "
+            "ANTHROPIC_API_KEY not configured. Add it to your .env file to run them."
         )
 
     if threshold_failures:

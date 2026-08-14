@@ -32,7 +32,6 @@ from database import (
     save_turn,
 )
 from media import store_all_media
-from reporting import format_report
 from whatsapp import send_message, send_document, format_confirmation
 
 logger = logging.getLogger(__name__)
@@ -79,6 +78,31 @@ def _parse_form_body(event: dict) -> dict:
         body_str = base64.b64decode(body_str).decode("utf-8")
     parsed = parse_qs(body_str, keep_blank_values=True)
     return {k: v[0] for k, v in parsed.items()}
+
+
+def _dispatch_and_reply(user_id, message, msg_type, agent_text, message_id, now):
+    """Build an AgentRequest, dispatch through the orchestrator, and send the reply.
+
+    Shared by the report branch and the general expense/income branch — both just
+    differ in what text/message_type they hand the orchestrator.
+    """
+    agent_request = AgentRequest(
+        user_id=user_id,
+        message_id=message_id,
+        phone=message["phone"],
+        text=agent_text,
+        media=[],
+        message_type=msg_type,
+        now=now,
+        conversation=[],
+    )
+    agent_response = orchestrator.handle_message(agent_request)
+
+    message_sid = send_message(message["phone"], agent_response.reply_text)
+    logger.info("Confirmation sent, Twilio SID: %s", message_sid)
+    save_turn(user_id, "assistant", agent_response.reply_text)
+
+    return {"statusCode": 200, "body": ""}
 
 
 def _handle_message(event):
@@ -158,23 +182,12 @@ def _handle_message(event):
             save_turn(user_id, "assistant", f"[excel] {filename}")
             return {"statusCode": 200, "body": ""}
 
-        # Report branch
+        # Report branch — routes through the orchestrator to reporting_agent
         if is_report_request(message["text"]):
             logger.info("Report request detected from %s", message["phone"])
-            date_range = parse_report_request(message["text"], now)
-            logger.info(
-                "Report date range: %s to %s",
-                date_range["min_date"], date_range["max_date"],
+            return _dispatch_and_reply(
+                user_id, message, msg_type, message["text"], message_id, now
             )
-            expenses = get_expenses(
-                user_id, date_range["min_date"], date_range["max_date"]
-            )
-            logger.info("Fetched %d expense(s) for report", len(expenses))
-            report = format_report(expenses, date_range["min_date"], date_range["max_date"])
-            message_sid = send_message(message["phone"], report)
-            logger.info("Report sent, Twilio SID: %s", message_sid)
-            save_turn(user_id, "assistant", report)
-            return {"statusCode": 200, "body": ""}
 
         # Image expense branch — unchanged, still the old OpenAI vision path
         if msg_type == "image":
@@ -208,7 +221,7 @@ def _handle_message(event):
             save_turn(user_id, "assistant", confirmation)
             return {"statusCode": 200, "body": ""}
 
-        # Text / audio expense branch — new Claude-based expense agent
+        # Text / audio expense/income branch — dispatched via the orchestrator
         if msg_type == "audio":
             media_item = stored_media[0]
             ext = media_item["ext"]
@@ -218,23 +231,9 @@ def _handle_message(event):
         else:
             agent_text = message["text"]
 
-        agent_request = AgentRequest(
-            user_id=user_id,
-            message_id=message_id,
-            phone=message["phone"],
-            text=agent_text,
-            media=[],
-            message_type=msg_type,
-            now=now,
-            conversation=[],
+        return _dispatch_and_reply(
+            user_id, message, msg_type, agent_text, message_id, now
         )
-        agent_response = orchestrator.handle_message(agent_request)
-
-        message_sid = send_message(message["phone"], agent_response.reply_text)
-        logger.info("Confirmation sent, Twilio SID: %s", message_sid)
-        save_turn(user_id, "assistant", agent_response.reply_text)
-
-        return {"statusCode": 200, "body": ""}
 
     except Exception:
         logger.exception("Unhandled error processing message from %s", message["phone"])

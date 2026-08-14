@@ -97,7 +97,7 @@ orchestrator's point of view an audio message and a text message are identical.
 | Expense agent — receipt/photo extraction | `claude-sonnet-5` | Planned | Deferred per deviation 2 above — stays on `parser.parse_expense_from_image` (OpenAI) until a vision eval baseline exists. |
 | Income agent — text/audio-transcript extraction | `claude-haiku-4-5-20251001` | **Shipped, Phase 2** | Same tier as expense's text path — structurally identical extraction task, just a narrower field set (no `payment_method`/`merchant`, since `incomes` has no such columns) and a different category enum. |
 | Income agent — photo (deposit slip) | `claude-sonnet-5` | Planned | Not built — same scope boundary as expense's own image path: all image messages still route to the expense-image branch unconditionally, so there's no income-image classification yet. |
-| Reporting agent — date-range parsing | `claude-haiku-4-5` | Planned | Same narrow, deterministic-ish JSON shape as today's `parse_report_request` (`{min_date, max_date}`). |
+| Reporting agent — date-range resolution | Deterministic Python (primary), `claude-haiku-4-5-20251001` (fallback only) | **Shipped, Phase 3** | Not "deterministic-ish JSON" as originally guessed — the entire eval dataset resolves via exact `timedelta`/`.weekday()` arithmetic, zero LLM calls. Claude is a fallback for phrasing outside that enumerable set (e.g. explicit `day/month` ranges), not the primary path. This is also the fix for `parse_report_request`'s two eval failures — see the Phase 3 rollout section. |
 | Reporting agent — report *formatting* | No LLM call | Unchanged | `reporting.format_report`'s existing grouping/totals logic stays deterministic Python — it's not a language task, and keeping it out of the LLM avoids hallucinated numbers in a place where correctness matters most. |
 | Audio transcription | OpenAI Whisper (`whisper-1`) — **unchanged** | Shipped (was never touched) | Claude has no ASR endpoint. This is a permanent, intentional exception, not a temporary gap — see the callout below. |
 
@@ -161,9 +161,9 @@ SDK version. Later agents should follow the same pattern.
 | `evals/run.py` | New `_run_expense_agent()`, sharing scoring/aggregation with `_run_parse_expense()` via `_run_expense_dataset()`. Runs against the same `parse_expense.json` dataset, printed side by side. Skips (with a clear message) instead of failing when `ANTHROPIC_API_KEY` isn't a real key, so `--check` doesn't spuriously fail for developers who haven't set it. | Shipped |
 | `pyproject.toml` (`evals` group) | Added `openinference-instrumentation-anthropic` alongside `openinference-instrumentation-openai`. | Shipped |
 | `src/tracing.py` | `setup_tracing()` gained `AnthropicInstrumentor().instrument()` alongside `OpenAIInstrumentor().instrument()`. | Shipped |
-| `evals/run.py` → `THRESHOLDS["expense_agent"]` | **Not yet set.** No `ANTHROPIC_API_KEY` was available in the environment Phase 1 was implemented in, so the live Claude-vs-OpenAI comparison hasn't been run. Run `uv run python -m evals.run` with a real key, observe the numbers, then add a `THRESHOLDS["expense_agent"]` entry (with headroom) before relying on `--check` to gate this path. | **Pending — do this before treating Phase 1 as fully verified.** |
-| `evals/scoring.py` | `score_expense` is reusable as-is for income (Phase 2) — same shape, only the category enum differs. | Unchanged, still applies |
-| `evals/datasets/` | New `parse_income.json` (Phase 2); optionally `classify_intent.json` once the orchestrator's guardrail/classifier exists (Phase 2+, see deviation 1). | Planned |
+| `evals/run.py` → `THRESHOLDS["expense_agent"]` | Set to 90%/95%/90%, headroom below an observed 100% run (n=15) that beat the OpenAI path's 93%/94%. | Shipped |
+| `evals/scoring.py` | `score_expense` reused as-is for income (Phase 2) and reporting (Phase 3's `score_date_range`, a sibling scorer already in this file) — same pattern, only the shape being scored differs. | Shipped |
+| `evals/datasets/` | `parse_income.json` (Phase 2, shipped); `parse_report_request.json` gained one Claude-fallback-triggering case (Phase 3). `classify_intent.json` still not needed — no guardrail/classifier exists (see deviation 1). | Shipped (income/report); guardrail dataset still not applicable |
 
 ## 3. Orchestrator ↔ agent contract
 
@@ -297,7 +297,7 @@ before any of this could deploy. Staying flat means this proposal needs zero cha
 | `orchestrator.py` | Single-agent dispatch today; grows keyword-independent routing once a second agent exists | Shipped (minimal) |
 | `expense_agent.py` | Identify, extract, classify, and persist an expense record — **text + audio-transcript only** | Shipped (text/audio) |
 | `income_agent.py` | Identify, extract, classify, and persist an income record — **text + audio-transcript only**, against the already-existing `incomes` table | Shipped (text/audio) |
-| `reporting_agent.py` | Date-range parsing (Claude) + report formatting (deterministic, delegates to `reporting.py`) | Planned |
+| `reporting_agent.py` | Date-range resolution (deterministic Python + Claude fallback) + report formatting (delegates to `reporting.py`, unchanged) — **read/aggregate, no persistence**, structurally different from expense/income | Shipped |
 | `onboarding_agent.py` | Welcome chat — see §6, needs its premise updated before this is built | Planned, needs revisit |
 
 No `customers.py` — identity already lives in `database.py` (`get_or_create_user`,
@@ -537,17 +537,77 @@ and modules the earlier phases already introduced.
   comparison. `THRESHOLDS["income_agent"]` set from an observed live run, same rule as
   Phase 1's `expense_agent` entry.
 
-### Phase 3 — Reporting agent + revisit onboarding
+### Phase 3 — Reporting agent — **shipped, `feature/phase-3-reporting-agent`**
 
-- `reporting_agent.py`: date-range parsing on Claude, replacing
-  `parser.parse_report_request` for the report path; `reporting.format_report` stays
-  deterministic Python (§2).
-- Orchestrator's classifier expands to the full enum (expense/income/report/other) now
-  that a guardrail has real off-topic cases to catch (report follow-ups outside the
-  keyword pre-filter's exact/fuzzy match).
-- Onboarding chat (§6) needs its design redone against the real `users`/`categories`
-  schema before it's built — not scheduled as "the next thing," revisit when there's
-  appetite for it.
+**Root cause found before designing the replacement, not after:** `parse_report_request`
+was failing its own 90% eval threshold at 83%, pre-existing across Phase 1 and Phase 2.
+Both failures traced to the same underlying problem — asking an LLM to do calendar
+arithmetic in free text generation:
+- `[hoy]` ("cuánto gasté hoy") — the prompt's rule list has no explicit "hoy" rule, so it
+  silently fell back to the month default. A missing rule, not a model limitation.
+- `[semana-pasada]` ("la semana pasada") — the model computed something closer to "last 7
+  days" than "Monday through Sunday of the previous calendar week." Computing a weekday
+  boundary from a reference date is exact `timedelta`/`.weekday()` arithmetic; asking an
+  LLM to reason about it in generated text is the wrong tool for the job.
+
+**Design that follows from that:** every case in `evals/datasets/parse_report_request.json`
+is one of a small, enumerable set of relative-date phrases, all computable exactly in
+Python. `reporting_agent._resolve_deterministic(text, now)` covers hoy/today, esta
+semana, la semana pasada, el mes pasado, últimos N días, Spanish month names, este mes,
+and the no-qualifier default — zero LLM calls for any of them, and the two failures above
+are structurally impossible now (there's no "missing rule" risk in an explicit if-chain,
+and no LLM weekday arithmetic to get wrong). Only text matching none of these (an explicit
+range like "entre el 3 de marzo y el 20 de abril") falls back to a Claude Haiku call —
+forced tool-use (`record_date_range`), same pattern as expense/income, closing the same
+"trust json.loads" gap `parse_report_request` has today. One such case was added to the
+eval dataset (`explicit-range-two-months`) so the fallback path isn't shipped with zero
+coverage.
+
+**`parser.parse_report_request` is untouched — Excel does not inherit this fix.** The
+Excel branch in `handler.py` calls it directly and is explicitly out of scope. This is a
+real, deliberate asymmetry: report and Excel will resolve "la semana pasada" differently
+until Excel is migrated too (not scheduled).
+
+**Orchestrator dispatch, not a classifier expansion.** The original plan for this phase
+(directly above, now superseded) assumed the guardrail/classifier deferred since Phase 1
+would land here. It didn't need to — `is_report_request` (unchanged, reused from
+`parser.py`) is a clean enough deterministic signal on its own, checked first in
+`orchestrator.handle_message`, before income, before the expense default:
+```python
+if is_report_request(request.text):
+    return reporting_agent.handle(request)
+if is_income_request(request.text):
+    return income_agent.handle(request)
+return expense_agent.handle(request)
+```
+`handler.py`'s report branch changed from inline logic to this dispatch, but its trigger
+condition and position are untouched (checked before image/audio branching, before
+transcription) — deliberately, to avoid a traced-through risk: moving report detection to
+run on post-transcription text for *every* message type would let an audio "exportame mis
+gastos" (Excel intent) get newly misrouted to `reporting_agent` instead of Excel, since
+Excel's own check never re-runs against a transcript. One real, positive side effect worth
+naming: because `orchestrator.handle_message` re-checks `is_report_request` on
+`request.text`, a spoken report request whose caption was empty now gets a second chance
+to match against the transcript — not a regression, since anything reaching that check
+already failed the same check pre-transcription.
+
+**`AgentResponse.data` reinterpreted for a read agent:** holds the query results
+(`get_expenses` output) used to build the report, not a persisted row — see
+`.claude/skills/new-agent/SKILL.md`'s "Two agent shapes" section for the general pattern
+this establishes.
+
+**Small DRY refactor:** `handler.py`'s report branch and its general text/audio dispatch
+block were near-identical once both went through the orchestrator — factored into a
+shared `_dispatch_and_reply(...)` helper.
+
+**Deferred, flagged explicitly rather than silently bundled in:** category-filtered
+reports (e.g. "cuánto gasté en comida este mes" scoped to just `comida`). Today's system
+has no category-scoped report at all — `get_expenses`/`format_report` always return the
+full breakdown — and adding one is a separable feature, not part of a faithful migration +
+bug fix. Revisit as explicit follow-up work.
+
+**Onboarding chat (§6)** still needs its design redone against the real `users`/
+`categories` schema before it's built — not scheduled, revisit when there's appetite.
 
 ### Phase 4 — Conversational memory (consumption)
 
@@ -560,12 +620,13 @@ and modules the earlier phases already introduced.
 
 ## 10. Open questions / risks
 
-- **`THRESHOLDS["expense_agent"]` is unset — the one concrete blocker before Phase 1 is
-  fully verified.** Run `uv run python -m evals.run` with a real `ANTHROPIC_API_KEY`,
-  observe the Claude Haiku 4.5 numbers on `parse_expense.json`, and add the threshold entry
-  (with headroom) before relying on `--check` for this path. Don't assume the
-  OpenAI-tuned `parse_expense` thresholds (85%/95%/85%) transfer — a different model has a
-  different accuracy profile.
+- **Excel doesn't inherit the Phase 3 date-parsing fix.** `parser.parse_report_request`
+  is untouched (explicit scope boundary); Excel and report resolve relative dates like
+  "la semana pasada" differently now. Migrating Excel to `reporting_agent`'s deterministic
+  resolver (or a shared module both call) would close this — not scheduled.
+- **Category-filtered reports** ("cuánto gasté en comida este mes" scoped to `comida`)
+  deferred in Phase 3 — today's system has no category-scoped report at all. Real,
+  separable follow-up work, not bundled into the migration + bug fix.
 - **Cost monitoring** becomes more important once Phase 4 ships, since conversation
   history is the one part of this design whose token cost grows with usage rather than
   staying flat per message. Recommend adding basic per-call token logging (via
