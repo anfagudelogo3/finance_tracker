@@ -137,12 +137,14 @@ def _run_income_agent() -> tuple[list[dict], dict]:
 
 def _run_date_range_dataset(dataset_name: str, resolve_fn) -> tuple[list[dict], dict]:
     """Run a parse_report_request-shaped dataset through any function of shape
-    (text: str, now: str) -> dict, and score with score_date_range. Shared by the
-    OpenAI path and the new deterministic+Claude-fallback reporting_agent."""
+    (case: dict) -> dict, and score with score_date_range. Shared by the OpenAI path
+    and the new deterministic+Claude-fallback reporting_agent. Takes the whole case
+    dict (not just input/now) so a wrapper can pull extra fields like `conversation`
+    for cases that depend on it — resolve_fn decides what it needs."""
     cases = _load_dataset(dataset_name)
     scores = []
     for case in cases:
-        actual = resolve_fn(case["input"], case["now"])
+        actual = resolve_fn(case)
         score = score_date_range(actual, case["expected"])
         score["id"] = case["id"]
         scores.append(score)
@@ -162,17 +164,28 @@ def _run_date_range_dataset(dataset_name: str, resolve_fn) -> tuple[list[dict], 
 
 
 def _run_parse_report_request() -> tuple[list[dict], dict]:
-    return _run_date_range_dataset("parse_report_request", parse_report_request)
+    # Old path takes no conversation param and never will (Excel still depends on it,
+    # unchanged) — cases that need conversation to resolve are expected failures here,
+    # not regressions; it structurally can't do this.
+    return _run_date_range_dataset(
+        "parse_report_request",
+        lambda case: parse_report_request(case["input"], case["now"]),
+    )
 
 
 def _run_reporting_agent() -> tuple[list[dict], dict]:
     """reporting_agent's date-range resolution (deterministic rules + Claude fallback
-    for anything they don't cover) against the same dataset — the fix for
-    parse_report_request's known failures (missing "hoy" rule, unreliable LLM weekday
-    arithmetic for "la semana pasada")."""
+    for anything they don't cover, including referential follow-ups resolved against
+    conversation history) against the same dataset — the fix for parse_report_request's
+    known failures (missing "hoy" rule, unreliable LLM weekday arithmetic for "la semana
+    pasada") plus the new follow-up capability (Phase 4)."""
     return _run_date_range_dataset(
         "parse_report_request",
-        lambda text, now_str: resolve_date_range(text, datetime.fromisoformat(now_str)),
+        lambda case: resolve_date_range(
+            case["input"],
+            datetime.fromisoformat(case["now"]),
+            case.get("conversation", []),
+        ),
     )
 
 

@@ -33,6 +33,7 @@ class TestExpenseTextPath:
     @patch("expense_agent.client")
     @patch("handler.send_message")
     @patch("handler.save_turn")
+    @patch("handler.load_recent_turns")
     @patch("handler.save_message")
     @patch("handler.get_or_create_user")
     @patch("handler.verify_signature")
@@ -41,6 +42,7 @@ class TestExpenseTextPath:
         mock_verify,
         mock_get_user,
         mock_save_message,
+        mock_load_recent_turns,
         mock_save_turn,
         mock_send_message,
         mock_claude_client,
@@ -50,6 +52,7 @@ class TestExpenseTextPath:
         mock_verify.return_value = True
         mock_get_user.return_value = 7
         mock_save_message.return_value = 1
+        mock_load_recent_turns.return_value = []
         mock_get_categories.return_value = ["comida", "otro"]
         mock_send_message.return_value = "SIDxxx"
         mock_save_expense.return_value = 101
@@ -81,6 +84,7 @@ class TestIncomeTextPath:
     @patch("income_agent.client")
     @patch("handler.send_message")
     @patch("handler.save_turn")
+    @patch("handler.load_recent_turns")
     @patch("handler.save_message")
     @patch("handler.get_or_create_user")
     @patch("handler.verify_signature")
@@ -89,6 +93,7 @@ class TestIncomeTextPath:
         mock_verify,
         mock_get_user,
         mock_save_message,
+        mock_load_recent_turns,
         mock_save_turn,
         mock_send_message,
         mock_claude_client,
@@ -98,6 +103,7 @@ class TestIncomeTextPath:
         mock_verify.return_value = True
         mock_get_user.return_value = 7
         mock_save_message.return_value = 1
+        mock_load_recent_turns.return_value = []
         mock_get_categories.return_value = ["salario", "otro"]
         mock_send_message.return_value = "SIDxxx"
         mock_save_income.return_value = 201
@@ -172,6 +178,7 @@ class TestReportTextPath:
     @patch("reporting_agent.get_expenses")
     @patch("handler.send_message")
     @patch("handler.save_turn")
+    @patch("handler.load_recent_turns")
     @patch("handler.save_message")
     @patch("handler.get_or_create_user")
     @patch("handler.verify_signature")
@@ -180,6 +187,7 @@ class TestReportTextPath:
         mock_verify,
         mock_get_user,
         mock_save_message,
+        mock_load_recent_turns,
         mock_save_turn,
         mock_send_message,
         mock_get_expenses,
@@ -187,6 +195,7 @@ class TestReportTextPath:
         mock_verify.return_value = True
         mock_get_user.return_value = 7
         mock_save_message.return_value = 1
+        mock_load_recent_turns.return_value = []
         mock_get_expenses.return_value = [
             {"amount": 32000, "currency": "COP", "category": "comida"},
         ]
@@ -205,6 +214,7 @@ class TestErrorContract:
     @patch("expense_agent.client")
     @patch("handler.send_message")
     @patch("handler.save_turn")
+    @patch("handler.load_recent_turns")
     @patch("handler.save_message")
     @patch("handler.get_or_create_user")
     @patch("handler.verify_signature")
@@ -213,6 +223,7 @@ class TestErrorContract:
         mock_verify,
         mock_get_user,
         mock_save_message,
+        mock_load_recent_turns,
         mock_save_turn,
         mock_send_message,
         mock_claude_client,
@@ -221,6 +232,7 @@ class TestErrorContract:
         mock_verify.return_value = True
         mock_get_user.return_value = 7
         mock_save_message.return_value = 1
+        mock_load_recent_turns.return_value = []
         mock_get_categories.return_value = ["comida"]
         mock_claude_client.messages.create.side_effect = RuntimeError("boom")
 
@@ -228,6 +240,44 @@ class TestErrorContract:
 
         assert result["statusCode"] == 200
         mock_send_message.assert_called_once_with("+573001234567", MSG_ERROR)
+
+
+class TestConversationHistoryWiring:
+    """Direct test of the Phase 4 wiring itself, independent of any live Claude
+    behavior — asserts load_recent_turns' output reaches AgentRequest.conversation."""
+
+    @patch("handler.orchestrator")
+    @patch("handler.save_turn")
+    @patch("handler.load_recent_turns")
+    @patch("handler.save_message")
+    @patch("handler.get_or_create_user")
+    @patch("handler.verify_signature")
+    def test_agent_request_carries_loaded_conversation_history(
+        self,
+        mock_verify,
+        mock_get_user,
+        mock_save_message,
+        mock_load_recent_turns,
+        mock_save_turn,
+        mock_orchestrator,
+    ):
+        mock_verify.return_value = True
+        mock_get_user.return_value = 7
+        mock_save_message.return_value = 1
+        history = [
+            {"role": "user", "content": "cuánto gasté esta semana"},
+            {"role": "assistant", "content": "📊 Resumen 22 jun – 25 jun 2026: ..."},
+        ]
+        mock_load_recent_turns.return_value = history
+        mock_orchestrator.handle_message.return_value = MagicMock(
+            reply_text="ok", reply_attachment=None
+        )
+
+        _handle_message(_make_event("¿y la anterior?"))
+
+        mock_load_recent_turns.assert_called_once_with(7)
+        agent_request = mock_orchestrator.handle_message.call_args[0][0]
+        assert agent_request.conversation == history
 
 
 class TestDuplicateMessage:

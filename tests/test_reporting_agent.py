@@ -23,9 +23,10 @@ _DATASET_PATH = (
 )
 _CASES = json.loads(_DATASET_PATH.read_text())
 
-# All dataset cases except the one deliberately designed to miss every deterministic
-# rule (that one's covered by TestFallsBackToClaudeWhenUnrecognized instead).
-_DETERMINISTIC_CASES = [c for c in _CASES if c["id"] != "explicit-range-two-months"]
+# All dataset cases except the ones deliberately designed to miss every deterministic
+# rule (those are covered by TestFallsBackToClaudeWhenUnrecognized instead).
+_CLAUDE_FALLBACK_CASE_IDS = {"explicit-range-two-months", "followup-anterior"}
+_DETERMINISTIC_CASES = [c for c in _CASES if c["id"] not in _CLAUDE_FALLBACK_CASE_IDS]
 
 
 class TestResolveDeterministic:
@@ -41,6 +42,22 @@ class TestResolveDeterministic:
         now = datetime.fromisoformat("2026-06-25T10:00:00-05:00")
         result = _resolve_deterministic("entre el 3 de marzo y el 20 de abril", now)
         assert result is None
+
+    def test_returns_none_for_referential_followup(self):
+        # Regression test for the Phase 4 fix: before it, this fell through every rule
+        # and silently returned the first-of-month default instead of signaling that
+        # it needs conversation history — the same "silent wrong default" failure mode
+        # Phase 3 was built to eliminate, showing up in a new shape.
+        now = datetime.fromisoformat("2026-06-25T10:00:00-05:00")
+        result = _resolve_deterministic("¿y la anterior?", now)
+        assert result is None
+
+    def test_still_resolves_followup_shaped_but_self_sufficient_phrase(self):
+        # "la semana pasada" is followup-shaped but self-sufficient — must keep
+        # resolving deterministically regardless of the referential-word fix above.
+        now = datetime.fromisoformat("2026-06-25T10:00:00-05:00")
+        result = _resolve_deterministic("¿y la semana pasada?", now)
+        assert result == {"min_date": "2026-06-15", "max_date": "2026-06-21"}
 
 
 class TestFallsBackToClaudeWhenUnrecognized:
@@ -72,6 +89,46 @@ class TestFallsBackToClaudeWhenUnrecognized:
         assert result == {"min_date": "2026-06-01", "max_date": "2026-06-25"}
         mock_client.messages.create.assert_not_called()
 
+    @patch("reporting_agent.client")
+    def test_resolve_date_range_threads_conversation_into_messages(self, mock_client):
+        block = MagicMock(
+            type="tool_use",
+            input={"min_date": "2026-06-15", "max_date": "2026-06-21"},
+        )
+        mock_client.messages.create.return_value = MagicMock(content=[block])
+        now = datetime.fromisoformat("2026-06-25T10:00:00-05:00")
+        conversation = [
+            {"role": "user", "content": "cuánto gasté esta semana"},
+            {"role": "assistant", "content": "📊 Resumen 22 jun – 25 jun 2026: ..."},
+        ]
+
+        result = resolve_date_range("¿y la anterior?", now, conversation)
+
+        assert result == {"min_date": "2026-06-15", "max_date": "2026-06-21"}
+        call = mock_client.messages.create.call_args
+        messages = call.kwargs["messages"]
+        # Prior turns first, current query last — real multi-turn history, not folded
+        # into the system prompt.
+        assert messages[:2] == conversation
+        assert messages[2] == {"role": "user", "content": "¿y la anterior?"}
+
+    @patch("reporting_agent.client")
+    def test_resolve_date_range_defaults_conversation_to_empty(self, mock_client):
+        # No conversation arg at all — existing Phase 3 call sites must keep working.
+        block = MagicMock(
+            type="tool_use",
+            input={"min_date": "2026-03-03", "max_date": "2026-04-20"},
+        )
+        mock_client.messages.create.return_value = MagicMock(content=[block])
+        now = datetime.fromisoformat("2026-06-25T10:00:00-05:00")
+
+        resolve_date_range("entre el 3 de marzo y el 20 de abril", now)
+
+        call = mock_client.messages.create.call_args
+        assert call.kwargs["messages"] == [
+            {"role": "user", "content": "entre el 3 de marzo y el 20 de abril"}
+        ]
+
 
 class TestHandle:
     @patch("reporting_agent.get_expenses")
@@ -100,6 +157,38 @@ class TestHandle:
         # data holds the query results used to build the report — not a persisted row.
         assert response.data == mock_get_expenses.return_value
         assert response.reply_attachment is None
+
+    @patch("reporting_agent.get_expenses")
+    @patch("reporting_agent.client")
+    def test_threads_request_conversation_into_resolve_date_range(
+        self, mock_client, mock_get_expenses
+    ):
+        block = MagicMock(
+            type="tool_use",
+            input={"min_date": "2026-06-15", "max_date": "2026-06-21"},
+        )
+        mock_client.messages.create.return_value = MagicMock(content=[block])
+        mock_get_expenses.return_value = []
+        conversation = [
+            {"role": "user", "content": "cuánto gasté esta semana"},
+            {"role": "assistant", "content": "📊 Resumen 22 jun – 25 jun 2026: ..."},
+        ]
+        request = AgentRequest(
+            user_id=7,
+            message_id=1,
+            phone="+573001234567",
+            text="¿y la anterior?",
+            media=[],
+            message_type="text",
+            now="2026-06-25T10:00:00-05:00",
+            conversation=conversation,
+        )
+
+        handle(request)
+
+        mock_get_expenses.assert_called_once_with(7, "2026-06-15", "2026-06-21")
+        messages = mock_client.messages.create.call_args.kwargs["messages"]
+        assert messages[:2] == conversation
 
     @patch("reporting_agent.get_expenses")
     def test_no_expenses_in_range(self, mock_get_expenses):

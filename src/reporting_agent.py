@@ -37,6 +37,22 @@ _THIS_MONTH_PHRASES = ["este mes", "this month"]
 _TODAY_PHRASES = ["hoy", "today"]
 _AMBIGUOUS_SIGNAL_WORDS = ["entre", "desde", "hasta", "between", "from", "since"]
 
+# Referential follow-ups ("¿y la anterior?") have no date content of their own — without
+# this check they fall through every rule above and hit the final "no signal → apply the
+# default" branch, silently returning the wrong range instead of asking Claude (which can
+# resolve them against conversation history). Same "don't guess" principle as
+# _AMBIGUOUS_SIGNAL_WORDS, just a different reason to bail.
+_REFERENTIAL_SIGNAL_WORDS = [
+    "anterior",
+    "esa misma",
+    "ese mismo",
+    "la misma",
+    "eso",
+    "previous",
+    "that",
+    "same",
+]
+
 _LAST_N_DAYS_RE = re.compile(r"(?:ultimos?|last)\s+(\d+)\s+(?:dias|days)")
 
 
@@ -114,10 +130,13 @@ def _resolve_deterministic(text: str, now: datetime) -> dict | None:
         }
 
     # Nothing matched, and no range word was present (checked above). A leftover digit
-    # here means a date-shaped expression we still don't recognize (e.g. a specific day
-    # without a range word) — don't guess, fall back to Claude. Otherwise this is
-    # genuinely unqualified ("resumen") — the existing default applies.
-    if any(ch.isdigit() for ch in normalized):
+    # means a date-shaped expression we still don't recognize (e.g. a specific day
+    # without a range word); a referential word means this depends on conversation
+    # history ("¿y la anterior?"). Either way, don't guess — fall back to Claude.
+    # Otherwise this is genuinely unqualified ("resumen") — the existing default applies.
+    if any(ch.isdigit() for ch in normalized) or any(
+        w in normalized for w in _REFERENTIAL_SIGNAL_WORDS
+    ):
         return None
 
     return {"min_date": today.replace(day=1).isoformat(), "max_date": today.isoformat()}
@@ -144,10 +163,11 @@ def _build_fallback_tool() -> dict:
     }
 
 
-def _resolve_with_claude(text: str, now: datetime) -> dict:
-    """Fallback for date expressions the deterministic rules don't cover (specific
-    date mentions, explicit ranges, etc.) — forced tool-use, not prompt-only JSON,
-    same pattern as expense_agent/income_agent."""
+def _resolve_with_claude(text: str, now: datetime, conversation: list[dict]) -> dict:
+    """Fallback for date expressions the deterministic rules don't cover: specific
+    date mentions, explicit ranges, and referential follow-ups ("¿y la anterior?") that
+    need conversation history to resolve. Forced tool-use, not prompt-only JSON, same
+    pattern as expense_agent/income_agent."""
     now_str = now.strftime("%Y-%m-%d (%A)")
     system = f"""Today is {now_str} (America/Bogota). The user is asking for a spending report. Resolve the exact date range they're referring to and call record_date_range.
 
@@ -156,13 +176,18 @@ Rules:
 - If only an end date is given, the start date is the first day of that month.
 - Dates without a year are assumed to be the most recent occurrence not in the future.
 - Both dates are inclusive, format YYYY-MM-DD.
+- If the message refers to a previous report without giving its own date expression
+  ("la anterior", "esa misma", "eso"), use the conversation history to figure out what
+  period is being referred to — including dates already stated in a previous report's
+  own text — and resolve relative to that.
 """
     logger.info("Calling Claude to resolve ambiguous date range: %s", text)
+    messages = list(conversation) + [{"role": "user", "content": text}]
     response = client.messages.create(
         model=CLAUDE_EXTRACTION_MODEL,
         max_tokens=256,
         system=system,
-        messages=[{"role": "user", "content": text}],
+        messages=messages,
         tools=[_build_fallback_tool()],
         tool_choice={"type": "tool", "name": "record_date_range"},
     )
@@ -171,14 +196,18 @@ Rules:
     return tool_use.input
 
 
-def resolve_date_range(text: str, now: datetime) -> dict:
+def resolve_date_range(
+    text: str, now: datetime, conversation: list[dict] | None = None
+) -> dict:
     """Resolve the date range for a report request. Deterministic rules cover the
     entire known eval dataset — only text matching none of them pays for a Claude call.
-    """
+    `conversation` (prior turns, oldest first) is only used by that fallback call, for
+    referential follow-ups — self-sufficient phrases never need it, even follow-up-shaped
+    ones like "la semana pasada"."""
     deterministic = _resolve_deterministic(text, now)
     if deterministic is not None:
         return deterministic
-    return _resolve_with_claude(text, now)
+    return _resolve_with_claude(text, now, conversation or [])
 
 
 def handle(request: AgentRequest) -> AgentResponse:
@@ -186,7 +215,7 @@ def handle(request: AgentRequest) -> AgentResponse:
     the query results used to build the report, not a newly-created row (unlike
     expense_agent/income_agent's extract-then-persist shape)."""
     now = datetime.fromisoformat(request.now)
-    date_range = resolve_date_range(request.text, now)
+    date_range = resolve_date_range(request.text, now, request.conversation)
     expenses = get_expenses(
         request.user_id, date_range["min_date"], date_range["max_date"]
     )
