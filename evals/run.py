@@ -21,7 +21,8 @@ from pathlib import Path
 from tracing import setup_tracing
 from parser import parse_expense, parse_report_request
 from expense_agent import _extract as _extract_expense_claude
-from config import DEFAULT_EXPENSE_CATEGORIES
+from income_agent import _extract as _extract_income_claude
+from config import DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES
 from evals.scoring import score_expense, score_date_range
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
@@ -33,6 +34,11 @@ DATASETS_DIR = Path(__file__).parent / "datasets"
 # 100% amount, 100% category. Not pinned to 100% — that's a small sample, and a
 # single new eval case or minor prompt change shouldn't break --check on one miss.
 # Re-tighten as the dataset grows and the number stays stable.
+#
+# "income_agent" thresholds are set with headroom below the observed
+# claude-haiku-4-5-20251001 run against parse_income.json (n=12): 100% overall,
+# 100% amount, 100% currency, 100% category. Same reasoning as expense_agent — not
+# pinned to 100%, small sample.
 THRESHOLDS: dict[str, dict[str, float]] = {
     "parse_expense": {
         "overall": 0.85,
@@ -40,6 +46,11 @@ THRESHOLDS: dict[str, dict[str, float]] = {
         "category": 0.85,
     },
     "expense_agent": {
+        "overall": 0.90,
+        "amount": 0.95,
+        "category": 0.90,
+    },
+    "income_agent": {
         "overall": 0.90,
         "amount": 0.95,
         "category": 0.90,
@@ -56,12 +67,13 @@ def _load_dataset(name: str) -> list[dict]:
     return json.loads((DATASETS_DIR / f"{name}.json").read_text())
 
 
-def _run_expense_dataset(extract_fn) -> tuple[list[dict], dict]:
-    """Run the parse_expense dataset through any side-effect-free extraction
-    function of shape (text: str) -> list[dict], and score the results.
-    Shared by the OpenAI and Claude expense paths so they're scored identically.
+def _run_scored_dataset(dataset_name: str, extract_fn) -> tuple[list[dict], dict]:
+    """Run a parse_expense-shaped dataset through any side-effect-free extraction
+    function of shape (text: str) -> list[dict], and score the results with
+    score_expense. Shared by every expense-shaped agent (OpenAI expense, Claude
+    expense, Claude income, ...) so they're all scored identically.
     """
-    cases = _load_dataset("parse_expense")
+    cases = _load_dataset(dataset_name)
     scores = []
     for case in cases:
         actual = extract_fn(case["input"])
@@ -87,15 +99,26 @@ def _run_expense_dataset(extract_fn) -> tuple[list[dict], dict]:
 
 
 def _run_parse_expense() -> tuple[list[dict], dict]:
-    return _run_expense_dataset(parse_expense)
+    return _run_scored_dataset("parse_expense", parse_expense)
 
 
 def _run_expense_agent() -> tuple[list[dict], dict]:
     """Same dataset, same scoring, run through the new Claude-based expense agent's
     extraction step (not handle(), which also persists to Postgres — evals have no
     live database) — this is the parity comparison against _run_parse_expense."""
-    return _run_expense_dataset(
-        lambda text: _extract_expense_claude(text, DEFAULT_EXPENSE_CATEGORIES)
+    return _run_scored_dataset(
+        "parse_expense",
+        lambda text: _extract_expense_claude(text, DEFAULT_EXPENSE_CATEGORIES),
+    )
+
+
+def _run_income_agent() -> tuple[list[dict], dict]:
+    """income_agent's extraction step against parse_income.json. No OpenAI-path
+    counterpart exists — income never had an old-pipeline equivalent — so this
+    establishes a fresh baseline rather than a parity comparison."""
+    return _run_scored_dataset(
+        "parse_income",
+        lambda text: _extract_income_claude(text, DEFAULT_INCOME_CATEGORIES),
     )
 
 
@@ -205,10 +228,16 @@ def main() -> None:
         _print_section("expense_agent (Claude)", scores_agent, metrics_agent)
         if args.check:
             threshold_failures.extend(_check_thresholds("expense_agent", metrics_agent))
+
+        print("\nRunning income_agent (Claude) against parse_income.json...")
+        scores_income, metrics_income = _run_income_agent()
+        _print_section("income_agent (Claude)", scores_income, metrics_income)
+        if args.check:
+            threshold_failures.extend(_check_thresholds("income_agent", metrics_income))
     else:
         print(
-            "\nSkipping expense_agent (Claude) eval — ANTHROPIC_API_KEY not configured. "
-            "Add it to your .env file to compare the new agent against parse_expense."
+            "\nSkipping expense_agent/income_agent (Claude) evals — ANTHROPIC_API_KEY not "
+            "configured. Add it to your .env file to run them."
         )
 
     if threshold_failures:

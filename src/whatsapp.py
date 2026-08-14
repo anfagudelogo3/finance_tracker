@@ -63,3 +63,37 @@ def format_confirmation(expenses: list[dict]) -> str:
         lines.append(f"Total: {currency} {formatted_total}")
 
     return "\n".join(lines)
+
+
+def format_income_confirmation(incomes: list[dict]) -> str:
+    """Build a human-friendly income confirmation message in Spanish.
+
+    Mirrors format_confirmation's shape — no payment_method suffix, since incomes
+    has no such column; "de {category}" instead of "en {category}" (received AS/FROM
+    a category, not spent ON one).
+    """
+    if len(incomes) == 1:
+        income = incomes[0]
+        currency = income.get("currency", "COP")
+        amount = f"{income['amount']:,.0f}".replace(",", ".")
+        category = income.get("category", "otro")
+        income_date = income.get("date", "hoy")
+        return f"✅ Registré {currency} {amount} de {category} para {income_date}"
+
+    # Multiple incomes: bullet list + total if same currency
+    lines = [f"✅ Registré {len(incomes)} ingresos:"]
+    totals: dict[str, float] = {}
+    for income in incomes:
+        currency = income.get("currency", "COP")
+        amount = income["amount"]
+        category = income.get("category", "otro")
+        formatted = f"{amount:,.0f}".replace(",", ".")
+        lines.append(f"  • {currency} {formatted} de {category}")
+        totals[currency] = totals.get(currency, 0) + amount
+
+    if len(totals) == 1:
+        currency, total = next(iter(totals.items()))
+        formatted_total = f"{total:,.0f}".replace(",", ".")
+        lines.append(f"Total: {currency} {formatted_total}")
+
+    return "\n".join(lines)

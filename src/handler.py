@@ -126,9 +126,6 @@ def _handle_message(event):
         # Record the inbound turn for short-term conversation memory
         save_turn(user_id, "user", message["text"] or f"[{_get_message_type(message)}]")
 
-        # Load the user's expense categories to inject into the parser prompt
-        expense_categories = get_user_categories(user_id, kind="expense")
-
         # Store any media attachments to S3 and keep bytes for LLM processing
         stored_media = []
         if message["media"]:
@@ -181,6 +178,7 @@ def _handle_message(event):
 
         # Image expense branch — unchanged, still the old OpenAI vision path
         if msg_type == "image":
+            expense_categories = get_user_categories(user_id, kind="expense")
             media_item = stored_media[0]
             expenses = parse_expense_from_image(
                 media_item["bytes"],
@@ -228,7 +226,6 @@ def _handle_message(event):
             media=[],
             message_type=msg_type,
             now=now,
-            categories=expense_categories,
             conversation=[],
         )
         agent_response = orchestrator.handle_message(agent_request)

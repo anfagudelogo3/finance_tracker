@@ -9,7 +9,7 @@ from config import (
     DEFAULT_EXPENSE_CATEGORIES,
     MSG_EMPTY_EXPENSE,
 )
-from database import save_expense
+from database import get_user_categories, save_expense
 from parser import _estimate_confidence
 from whatsapp import format_confirmation
 
@@ -129,7 +129,8 @@ def _extract(text: str, categories: list[str]) -> list[dict]:
 def handle(request: AgentRequest) -> AgentResponse:
     """Identify, extract, classify, and persist expense(s) from a text or
     audio-transcript message. Image expenses stay on the old OpenAI vision path."""
-    expenses = _extract(request.text, request.categories)
+    categories = get_user_categories(request.user_id, kind="expense")
+    expenses = _extract(request.text, categories)
     if not expenses:
         logger.info("No expenses parsed from message id=%d", request.message_id)
         return AgentResponse(ok=True, reply_text=MSG_EMPTY_EXPENSE, data=None)

@@ -6,13 +6,15 @@ from agent_types import AgentRequest
 from config import MSG_EMPTY_EXPENSE
 from expense_agent import handle, _build_system_prompt
 
+_DEFAULT_CATEGORIES = ["comida", "transporte", "mercado", "entretenimiento", "otro"]
+
 
 def _tool_use_response(expenses: list[dict]) -> MagicMock:
     block = MagicMock(type="tool_use", input={"expenses": expenses})
     return MagicMock(content=[block])
 
 
-def _request(text: str, categories: list[str] | None = None) -> AgentRequest:
+def _request(text: str) -> AgentRequest:
     return AgentRequest(
         user_id=7,
         message_id=1,
@@ -21,16 +23,18 @@ def _request(text: str, categories: list[str] | None = None) -> AgentRequest:
         media=[],
         message_type="text",
         now="2026-08-14T10:00:00-05:00",
-        categories=categories
-        or ["comida", "transporte", "mercado", "entretenimiento", "otro"],
         conversation=[],
     )
 
 
 class TestHandle:
     @patch("expense_agent.save_expense")
+    @patch("expense_agent.get_user_categories")
     @patch("expense_agent.client")
-    def test_parses_simple_expense(self, mock_client, mock_save_expense):
+    def test_parses_simple_expense(
+        self, mock_client, mock_get_categories, mock_save_expense
+    ):
+        mock_get_categories.return_value = _DEFAULT_CATEGORIES
         mock_save_expense.return_value = 101
         mock_client.messages.create.return_value = _tool_use_response(
             [
@@ -57,8 +61,12 @@ class TestHandle:
         mock_save_expense.assert_called_once()
 
     @patch("expense_agent.save_expense")
+    @patch("expense_agent.get_user_categories")
     @patch("expense_agent.client")
-    def test_parses_expense_with_payment_method(self, mock_client, mock_save_expense):
+    def test_parses_expense_with_payment_method(
+        self, mock_client, mock_get_categories, mock_save_expense
+    ):
+        mock_get_categories.return_value = _DEFAULT_CATEGORIES
         mock_save_expense.return_value = 102
         mock_client.messages.create.return_value = _tool_use_response(
             [
@@ -79,8 +87,12 @@ class TestHandle:
         assert response.data[0]["payment_method"] == "tarjeta"
 
     @patch("expense_agent.save_expense")
+    @patch("expense_agent.get_user_categories")
     @patch("expense_agent.client")
-    def test_parses_multiple_expenses(self, mock_client, mock_save_expense):
+    def test_parses_multiple_expenses(
+        self, mock_client, mock_get_categories, mock_save_expense
+    ):
+        mock_get_categories.return_value = _DEFAULT_CATEGORIES
         mock_save_expense.side_effect = [201, 202]
         mock_client.messages.create.return_value = _tool_use_response(
             [
@@ -111,8 +123,12 @@ class TestHandle:
         assert mock_save_expense.call_count == 2
 
     @patch("expense_agent.save_expense")
+    @patch("expense_agent.get_user_categories")
     @patch("expense_agent.client")
-    def test_no_expenses_returns_empty_fallback(self, mock_client, mock_save_expense):
+    def test_no_expenses_returns_empty_fallback(
+        self, mock_client, mock_get_categories, mock_save_expense
+    ):
+        mock_get_categories.return_value = _DEFAULT_CATEGORIES
         mock_client.messages.create.return_value = _tool_use_response([])
 
         response = handle(_request("gracias"))
@@ -123,10 +139,12 @@ class TestHandle:
         mock_save_expense.assert_not_called()
 
     @patch("expense_agent.save_expense")
+    @patch("expense_agent.get_user_categories")
     @patch("expense_agent.client")
     def test_injects_user_categories_into_prompt_and_forces_tool(
-        self, mock_client, mock_save_expense
+        self, mock_client, mock_get_categories, mock_save_expense
     ):
+        mock_get_categories.return_value = ["mascota", "comida"]
         mock_save_expense.return_value = 301
         mock_client.messages.create.return_value = _tool_use_response(
             [
@@ -141,8 +159,9 @@ class TestHandle:
             ]
         )
 
-        handle(_request("croquetas 5000", categories=["mascota", "comida"]))
+        handle(_request("croquetas 5000"))
 
+        mock_get_categories.assert_called_once_with(7, kind="expense")
         call = mock_client.messages.create.call_args
         assert "mascota" in call.kwargs["system"]
         tool = call.kwargs["tools"][0]

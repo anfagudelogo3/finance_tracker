@@ -178,6 +178,36 @@ def save_expense(message_id: int, expense: dict, user_id: int) -> int:
             return row_id
 
 
+def save_income(message_id: int, income: dict, user_id: int) -> int:
+    """Insert a parsed income record linked to a message and user. Returns the new row ID.
+
+    Mirrors save_expense's pattern exactly, but `source` here means the money's origin
+    ('manual' | 'gmail' | 'bank'), not the WhatsApp message channel — callers must not
+    pass a message_type value into it.
+    """
+    query = """
+        INSERT INTO incomes (
+            user_id, message_id, amount, currency, category, income_date,
+            description, confidence, source
+        ) VALUES (
+            %(user_id)s, %(message_id)s, %(amount)s, %(currency)s, %(category)s, %(date)s,
+            %(description)s, %(confidence)s, %(source)s
+        )
+        RETURNING id;
+    """
+    income["user_id"] = user_id
+    income["message_id"] = message_id
+    income.setdefault("currency", "COP")
+    income.setdefault("source", "manual")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, income)
+            row_id = cur.fetchone()["id"]
+            conn.commit()
+            logger.debug("Inserted income id=%d message_id=%d", row_id, message_id)
+            return row_id
+
+
 def get_expenses(user_id: int, min_date: str, max_date: str) -> list[dict]:
     """Return all non-deleted expenses for a user within the date range (inclusive)."""
     query = """
