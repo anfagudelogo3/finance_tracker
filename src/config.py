@@ -9,6 +9,9 @@ ALLOWED_PHONE_NUMBERS = set(os.environ["ALLOWED_PHONE_NUMBERS"].split(","))  # e
 # OpenAI
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 
+# Anthropic (Claude) — expense agent's text/audio extraction path
+ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
+
 # Database (Neon PostgreSQL)
 DATABASE_URL = os.environ["DATABASE_URL"]
 
@@ -23,6 +26,9 @@ OPENAI_TEXT_MODEL = "gpt-4o-mini"
 OPENAI_VISION_MODEL = "gpt-4o"
 OPENAI_AUDIO_MODEL = "whisper-1"
 OPENAI_AUDIO_LANGUAGE = "es"
+
+# Claude models — expense agent (text/audio only; image expense stays on OpenAI vision)
+CLAUDE_EXTRACTION_MODEL = "claude-haiku-4-5-20251001"
 
 # S3
 PRESIGNED_URL_EXPIRY_SECONDS = 60

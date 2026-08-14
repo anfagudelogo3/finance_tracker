@@ -5,6 +5,7 @@ description = "WhatsApp-based personal finance tracker"
 requires-python = ">=3.12"
 dependencies = [
     "openai>=1.0.0",
+    "anthropic>=0.112.0",
     "psycopg2-binary>=2.9.0",
     "twilio>=9.10.4",
     "requests>=2.32.0",
@@ -22,6 +23,7 @@ dev = [
 evals = [
     "arize-phoenix>=8.0.0",
     "openinference-instrumentation-openai>=0.1.0",
+    "openinference-instrumentation-anthropic>=0.1.0",
 ]
 
 [tool.pytest.ini_options]

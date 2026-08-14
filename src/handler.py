@@ -5,20 +5,22 @@ from datetime import datetime
 from urllib.parse import parse_qs
 from zoneinfo import ZoneInfo
 
-# Tracing is set up before parser is imported so OpenAI calls are instrumented.
+# Tracing is set up before parser/orchestrator are imported so OpenAI and Claude
+# calls are instrumented (both client singletons are created at import time).
 from tracing import setup_tracing
 setup_tracing()
 
 from config import ALLOWED_PHONE_NUMBERS, WEBHOOK_URL, MSG_ERROR, MSG_EMPTY_EXPENSE
 from webhook import verify_signature, extract_message
 from parser import (
-    parse_expense,
     parse_expense_from_image,
     transcribe_audio,
     is_excel_request,
     is_report_request,
     parse_report_request
 )
+from agent_types import AgentRequest
+import orchestrator
 from excel import create_excel_bytes, upload_and_sign
 from database import (
     save_message,
@@ -177,16 +179,8 @@ def _handle_message(event):
             save_turn(user_id, "assistant", report)
             return {"statusCode": 200, "body": ""}
 
-        # Expense branch — routes by message type
-        if msg_type == "audio":
-            media_item = stored_media[0]
-            ext = media_item["ext"]
-            transcript = transcribe_audio(media_item["bytes"], filename=f"audio.{ext}")
-            update_message_transcript(message_id, transcript)
-            combined_text = f"{transcript} {message['text']}".strip()
-            expenses = parse_expense(combined_text, categories=expense_categories)
-            source = "audio"
-        elif msg_type == "image":
+        # Image expense branch — unchanged, still the old OpenAI vision path
+        if msg_type == "image":
             media_item = stored_media[0]
             expenses = parse_expense_from_image(
                 media_item["bytes"],
@@ -194,37 +188,54 @@ def _handle_message(event):
                 caption=message["text"],
                 categories=expense_categories,
             )
-            source = "image"
-        else:
-            expenses = parse_expense(message["text"], categories=expense_categories)
-            source = "text"
+            logger.info("Parsed %d expense(s) from message id=%d (source=image)", len(expenses), message_id)
 
-        logger.info("Parsed %d expense(s) from message id=%d (source=%s)", len(expenses), message_id, source)
+            if not expenses:
+                logger.info("No expenses parsed from message id=%d, sending fallback reply", message_id)
+                send_message(message["phone"], MSG_EMPTY_EXPENSE)
+                save_turn(user_id, "assistant", MSG_EMPTY_EXPENSE)
+                return {"statusCode": 200, "body": ""}
 
-        if not expenses:
-            logger.info("No expenses parsed from message id=%d, sending fallback reply", message_id)
-            send_message(message["phone"], MSG_EMPTY_EXPENSE)
-            save_turn(user_id, "assistant", MSG_EMPTY_EXPENSE)
+            for expense in expenses:
+                expense["source"] = "image"
+                expense_id = save_expense(message_id, expense, user_id)
+                logger.info(
+                    "Expense saved: id=%d amount=%s category=%s confidence=%s source=image",
+                    expense_id, expense.get("amount"), expense.get("category"), expense.get("confidence"),
+                )
+
+            confirmation = format_confirmation(expenses)
+            message_sid = send_message(message["phone"], confirmation)
+            logger.info("Confirmation sent, Twilio SID: %s", message_sid)
+            save_turn(user_id, "assistant", confirmation)
             return {"statusCode": 200, "body": ""}
 
-        # Save each expense linked to message and user
-        for expense in expenses:
-            expense["source"] = source
-            expense_id = save_expense(message_id, expense, user_id)
-            logger.info(
-                "Expense saved: id=%d amount=%s category=%s confidence=%s source=%s",
-                expense_id,
-                expense.get("amount"),
-                expense.get("category"),
-                expense.get("confidence"),
-                source,
-            )
+        # Text / audio expense branch — new Claude-based expense agent
+        if msg_type == "audio":
+            media_item = stored_media[0]
+            ext = media_item["ext"]
+            transcript = transcribe_audio(media_item["bytes"], filename=f"audio.{ext}")
+            update_message_transcript(message_id, transcript)
+            agent_text = f"{transcript} {message['text']}".strip()
+        else:
+            agent_text = message["text"]
 
-        # Send confirmation
-        confirmation = format_confirmation(expenses)
-        message_sid = send_message(message["phone"], confirmation)
+        agent_request = AgentRequest(
+            user_id=user_id,
+            message_id=message_id,
+            phone=message["phone"],
+            text=agent_text,
+            media=[],
+            message_type=msg_type,
+            now=now,
+            categories=expense_categories,
+            conversation=[],
+        )
+        agent_response = orchestrator.handle_message(agent_request)
+
+        message_sid = send_message(message["phone"], agent_response.reply_text)
         logger.info("Confirmation sent, Twilio SID: %s", message_sid)
-        save_turn(user_id, "assistant", confirmation)
+        save_turn(user_id, "assistant", agent_response.reply_text)
 
         return {"statusCode": 200, "body": ""}
 

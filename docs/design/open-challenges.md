@@ -1,5 +1,12 @@
 # Open Challenges
 
+> **Superseded.** The phased plan this document referenced
+> ([agentic-architecture.md](agentic-architecture.md)) is superseded by
+> [`docs/agent-architecture.md`](../agent-architecture.md). The two challenges below
+> (proactive alerts, Gmail/bank income extraction) are still real, still deferred, and
+> still worth keeping — they just now sit beyond `docs/agent-architecture.md`'s phased
+> plan instead.
+
 Capabilities that are part of the long-term vision but are **deliberately deferred** —
 they have real prerequisites (infrastructure, third-party approval, OAuth) that put them
 beyond the current phased plan ([agentic-architecture.md](agentic-architecture.md)).

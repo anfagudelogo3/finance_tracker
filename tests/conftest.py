@@ -9,6 +9,7 @@ _TEST_ENV = {
     "TWILIO_WHATSAPP_NUMBER": "whatsapp:+14155238886",
     "ALLOWED_PHONE_NUMBERS": "+573001234567",
     "OPENAI_API_KEY": "sk-test",
+    "ANTHROPIC_API_KEY": "sk-ant-test",
     "DATABASE_URL": "postgresql://test:test@localhost/testdb",
     "S3_BUCKET_NAME": "test-bucket",
     "WEBHOOK_URL": "https://test.example.com/",

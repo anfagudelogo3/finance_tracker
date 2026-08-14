@@ -6,8 +6,9 @@ Finance Tracker uses PostgreSQL (Neon in production). The schema is defined by
 As of **Phase 0** (multi-agent foundation), the schema is organized around a `users`
 entity. Every row of every table is owned by a user, resolved from the verified WhatsApp
 phone number. Some tables (`incomes`, `budgets`) are created now but only used by agents
-introduced in later phases — see
-[design/agentic-architecture.md](design/agentic-architecture.md).
+introduced in later phases — see [agent-architecture.md](../agent-architecture.md) for the
+current agent rollout plan (identity/categories/conversation-turn design here is unchanged
+by it; only the agent architecture built on top of this schema changed).
 
 ```
 users ──┬── messages ──── expenses (FK message_id, user_id)
