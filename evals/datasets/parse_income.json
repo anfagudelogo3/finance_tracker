@@ -1,0 +1,113 @@
+[
+  {
+    "id": "simple-salary",
+    "input": "me pagaron 2000000 de salario",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 2000000, "currency": "COP", "category": "salario"}]
+    },
+    "tags": ["text", "single", "simple"]
+  },
+  {
+    "id": "freelance-client",
+    "input": "cobré 500000 de un cliente",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 500000, "currency": "COP", "category": "freelance"}]
+    },
+    "tags": ["text", "single", "simple"]
+  },
+  {
+    "id": "business-sale",
+    "input": "vendí productos por 300000 en mi negocio",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 300000, "currency": "COP", "category": "negocio"}]
+    },
+    "tags": ["text", "single", "simple"]
+  },
+  {
+    "id": "investment-return",
+    "input": "recibí 150000 de dividendos de mis acciones",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 150000, "currency": "COP", "category": "inversion"}]
+    },
+    "tags": ["text", "single", "simple"]
+  },
+  {
+    "id": "insurance-reimbursement",
+    "input": "me reembolsaron 45000 del seguro",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 45000, "currency": "COP", "category": "reembolso"}]
+    },
+    "tags": ["text", "single", "simple"]
+  },
+  {
+    "id": "family-gift",
+    "input": "mi tia me regalo 100000",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 100000, "currency": "COP", "category": "regalo"}]
+    },
+    "tags": ["text", "single", "simple"]
+  },
+  {
+    "id": "salary-slang-quincena",
+    "input": "me consignaron mi quincena de 1200000",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 1200000, "currency": "COP", "category": "salario"}]
+    },
+    "tags": ["text", "single", "slang"]
+  },
+  {
+    "id": "usd-freelance-project",
+    "input": "me pagaron 500 dolares por un proyecto",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 500, "currency": "USD", "category": "freelance"}]
+    },
+    "tags": ["text", "single", "usd"]
+  },
+  {
+    "id": "salary-accent",
+    "input": "recibí mi salario de 2500000",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 2500000, "currency": "COP", "category": "salario"}]
+    },
+    "tags": ["text", "single", "accent"]
+  },
+  {
+    "id": "unspecified-category",
+    "input": "recibí 80000 sin especificar de que",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 80000, "currency": "COP", "category": "otro"}]
+    },
+    "tags": ["text", "single", "fallback-category"]
+  },
+  {
+    "id": "transfer-freelance",
+    "input": "me transfirieron 250000 de un cliente",
+    "expected": {
+      "count": 1,
+      "expenses": [{"amount": 250000, "currency": "COP", "category": "freelance"}]
+    },
+    "tags": ["text", "single", "slang"]
+  },
+  {
+    "id": "multi-salary-gift",
+    "input": "me pagaron mi salario de 3000000 y tambien recibi 200000 de regalo",
+    "expected": {
+      "count": 2,
+      "expenses": [
+        {"amount": 3000000, "currency": "COP", "category": "salario"},
+        {"amount": 200000, "currency": "COP", "category": "regalo"}
+      ]
+    },
+    "tags": ["text", "multi"]
+  }
+]

@@ -52,3 +52,4 @@ CONVERSATION_WINDOW_MINUTES = 30    # only turns within this window count as "re
 # Reply messages
 MSG_ERROR = "Ocurrió un error inesperado. Por favor intenta de nuevo."
 MSG_EMPTY_EXPENSE = "No entendí ese mensaje. Intenta describir el gasto con monto y categoría."
+MSG_EMPTY_INCOME = "No entendí ese mensaje. Intenta describir el ingreso con monto y categoría."

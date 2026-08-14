@@ -26,7 +26,10 @@ implementation:**
    `is_excel_request`/`is_report_request` keyword gates already run before the
    orchestrator is ever called, and there's no off-topic deflection behavior in the
    product today to preserve. Adding a classification call now would be a new LLM call
-   with nothing to gate. It lands once a second agent (income) exists to route between.
+   with nothing to gate. **Still true after Phase 2** (income): the expense/income split
+   turned out to have a clean-enough deterministic signal (`orchestrator.is_income_request`,
+   phrase-level keywords) that a classification call still isn't needed — deferred
+   further, to whenever a case actually shows up that keywords can't distinguish.
 2. Image expenses stay on the old OpenAI vision path (`parser.parse_expense_from_image`),
    untouched, for now — no eval/test baseline exists for that path to diff against.
    Text and audio-transcript expenses (audio reduces to text after Whisper) moved to
@@ -89,10 +92,11 @@ orchestrator's point of view an audio message and a text message are identical.
 | Agent / call | Model | Status | Why |
 |---|---|---|---|
 | Expense agent — text/audio-transcript extraction | `claude-haiku-4-5-20251001` | **Shipped, Phase 1** | Mirrors the old `gpt-4o-mini` tier: narrow, high-volume, cost-sensitive structured extraction from short WhatsApp messages. Forced tool-use (`tool_choice`), not prompt-described JSON — see below. |
-| Orchestrator — guardrail + intent classification | `claude-haiku-4-5` | Planned | Deferred per deviation 1 above — no second agent to route between yet, so no call is made. |
+| Orchestrator — guardrail + intent classification | `claude-haiku-4-5` | Planned | Deferred per deviation 1 above — `orchestrator.is_income_request`'s deterministic keyword check handles expense-vs-income routing without a call; still nothing to guard against off-topic. |
 | Onboarding agent — parse name / email / category preferences | `claude-haiku-4-5` | Planned, needs revisit | See §6 — the `users` table already auto-provisions with no gate, so this section's premise needs updating before it's actually built. |
 | Expense agent — receipt/photo extraction | `claude-sonnet-5` | Planned | Deferred per deviation 2 above — stays on `parser.parse_expense_from_image` (OpenAI) until a vision eval baseline exists. |
-| Income agent — text / photo | `claude-haiku-4-5` (text), `claude-sonnet-5` (photo/deposit-slip) | Planned | Structurally identical extraction task to expense, just a different category enum; builds against the already-existing `incomes` table (see §5). |
+| Income agent — text/audio-transcript extraction | `claude-haiku-4-5-20251001` | **Shipped, Phase 2** | Same tier as expense's text path — structurally identical extraction task, just a narrower field set (no `payment_method`/`merchant`, since `incomes` has no such columns) and a different category enum. |
+| Income agent — photo (deposit slip) | `claude-sonnet-5` | Planned | Not built — same scope boundary as expense's own image path: all image messages still route to the expense-image branch unconditionally, so there's no income-image classification yet. |
 | Reporting agent — date-range parsing | `claude-haiku-4-5` | Planned | Same narrow, deterministic-ish JSON shape as today's `parse_report_request` (`{min_date, max_date}`). |
 | Reporting agent — report *formatting* | No LLM call | Unchanged | `reporting.format_report`'s existing grouping/totals logic stays deterministic Python — it's not a language task, and keeping it out of the LLM avoids hallucinated numbers in a place where correctness matters most. |
 | Audio transcription | OpenAI Whisper (`whisper-1`) — **unchanged** | Shipped (was never touched) | Claude has no ASR endpoint. This is a permanent, intentional exception, not a temporary gap — see the callout below. |
@@ -178,6 +182,15 @@ have one: `media` matches `media.store_all_media()`'s output, `conversation` mat
 dataclasses — identity is a plain `user_id` (the `users` table already exists), and
 attachments are a plain dict.
 
+**No `categories` field — changed in Phase 2.** Phase 1 had it here, populated by
+`handler.py` before any routing decision, always with `kind="expense"`. Phase 2 (income)
+exposed why that's wrong: which category `kind` applies depends on which agent ends up
+handling the request, decided by `orchestrator.py` *after* this object is already built.
+Fix: each agent loads its own via `database.get_user_categories(request.user_id,
+kind=...)` inside `handle()` — the same "agent owns its own domain lookups" shape agents
+already use for persistence and reply formatting. No new DB round-trip; it moved from
+`handler.py` into each `handle()`, not duplicated.
+
 ```python
 @dataclass
 class AgentRequest:
@@ -188,7 +201,6 @@ class AgentRequest:
     media: list[dict]          # media.store_all_media() shape; [] for text/audio
     message_type: str          # "text" | "audio" | "image"
     now: str                   # ISO datetime, America/Bogota
-    categories: list[str]      # database.get_user_categories(user_id, "expense")
     conversation: list[dict]   # [] in Phase 1 — recorded since Phase 0, not yet consumed
 
 
@@ -254,11 +266,12 @@ Input message: `"uber 14000"` from an existing user.
 3. Keyword pre-filter for Excel export / report requests — unchanged from today's
    `is_excel_request` / `is_report_request`, evaluated in `handler.py` before the
    orchestrator is called at all (not inside `orchestrator.py`).
-4. ~~Guardrail + intent classification~~ — deferred, see deviation 1. Today
-   `orchestrator.handle_message` dispatches directly to `expense_agent`, the only agent
-   that exists.
+4. ~~Guardrail + intent classification~~ — deferred, see deviation 1. As of Phase 1,
+   `orchestrator.handle_message` dispatched directly to `expense_agent`, the only agent
+   that existed; as of Phase 2, it dispatches via `is_income_request`'s deterministic
+   keyword check (§9's Phase 2 section) — still no classification call.
 5. ~~`on_topic: false` → deflection reply~~ — not implemented yet (nothing to guard
-   against with a single agent and no off-topic case in the product today).
+   against — no off-topic case in the product today).
 6. Dispatch to the matching agent, send `reply_text` — done, but the actual Twilio send
    is still in `handler.py` per deviation 3, not centralized in the orchestrator.
 7. (Phase 4) Persist both turns to conversation history — the *storage* already exists
@@ -283,7 +296,7 @@ before any of this could deploy. Staying flat means this proposal needs zero cha
 | `agent_types.py` | Shared `AgentRequest` / `AgentResponse` dataclasses — the contract above | Shipped |
 | `orchestrator.py` | Single-agent dispatch today; grows keyword-independent routing once a second agent exists | Shipped (minimal) |
 | `expense_agent.py` | Identify, extract, classify, and persist an expense record — **text + audio-transcript only** | Shipped (text/audio) |
-| `income_agent.py` | Identify, extract, classify, and persist an income record (text + photo), against the already-existing `incomes` table | Planned (Phase 2) |
+| `income_agent.py` | Identify, extract, classify, and persist an income record — **text + audio-transcript only**, against the already-existing `incomes` table | Shipped (text/audio) |
 | `reporting_agent.py` | Date-range parsing (Claude) + report formatting (deterministic, delegates to `reporting.py`) | Planned |
 | `onboarding_agent.py` | Welcome chat — see §6, needs its premise updated before this is built | Planned, needs revisit |
 
@@ -491,18 +504,38 @@ and modules the earlier phases already introduced.
   report, and image-expense branches are untouched.
 - `evals/run.py` gained `_run_expense_agent()`, run against the same
   `evals/datasets/parse_expense.json` as `_run_parse_expense()` for direct comparison.
-  **Not yet run against a live Anthropic key** — no `ANTHROPIC_API_KEY` was available in
-  the environment this phase was implemented in. `THRESHOLDS["expense_agent"]` is still
-  unset; running the live comparison and setting it is the one remaining step before this
-  phase is fully verified (see §2's evals table).
+  Run against a live Anthropic key: 100% overall/amount/category (n=15), beating the
+  OpenAI path's 93%/94%. `THRESHOLDS["expense_agent"]` set to 90%/95%/90% — headroom below
+  the observed 100%, not pinned to it (small sample).
 - `classify_intent.json` (optional guardrail eval) not added — no guardrail exists yet.
 
-### Phase 2 — Income agent
+### Phase 2 — Income agent — **shipped, `feature/phase-2-income-agent`**
 
-- `incomes` table already exists (Phase 0) — new work is `income_agent.py` only.
-- Orchestrator gains real routing (expense vs. income vs. ...) — the first point where a
-  classification call actually has something to decide between (see deviation 1).
-- New: `evals/datasets/parse_income.json`, reusing `evals/scoring.py`'s `score_expense`.
+- New: `income_agent.py`, `database.save_income`, `whatsapp.format_income_confirmation`,
+  `config.MSG_EMPTY_INCOME`, `evals/datasets/parse_income.json`. `incomes`/`categories`
+  tables reused as-is from Phase 0 — no schema changes.
+- **`AgentRequest.categories` removed** (see the contract-change note above §3's dataclass
+  block) — `expense_agent.py` updated to match, plus its tests. This is the one Phase 2
+  change that reaches back into already-shipped Phase 1 code.
+- **`orchestrator.py` gained its first real dispatch decision**: `is_income_request(text)`,
+  a phrase-level keyword check (deliberately no fuzzy single-word matching — income and
+  expense vocabulary collide on shared stems, e.g. "pagué" vs. "me pagaron"). Lives in
+  `orchestrator.py`, not `parser.py` — `parser.py` owns intent routing for the messages
+  `handler.py` dispatches (excel/report); `orchestrator.py` now owns it for the messages
+  it dispatches. Heuristic, not exhaustive: an unmatched income message still falls
+  through to `expense_agent` (no regression — same as before this agent existed).
+- **Scope, matching Phase 1's precedent:** text + audio-transcript only. Image messages
+  are unconditionally expense-photo queries today; there's no income-image
+  classification, and building one is out of scope here.
+- **Accepted gap:** `is_excel_request`/`is_report_request` still run before the
+  orchestrator, so "exportame mis ingresos" still routes to the expense-only Excel path
+  (`get_expenses` only reads `expenses`). Income in exports/reports is
+  `reporting_agent`'s job (Phase 3+).
+- `evals/run.py`'s `_run_expense_dataset` generalized to `_run_scored_dataset(dataset_name,
+  extract_fn)`; `_run_income_agent()` added. No OpenAI-path counterpart for income (it
+  never existed under the old pipeline) — this is a fresh baseline, not a parity
+  comparison. `THRESHOLDS["income_agent"]` set from an observed live run, same rule as
+  Phase 1's `expense_agent` entry.
 
 ### Phase 3 — Reporting agent + revisit onboarding
 
