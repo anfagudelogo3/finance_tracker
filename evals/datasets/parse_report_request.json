@@ -82,5 +82,12 @@
     "now": "2026-06-25T10:00:00-05:00",
     "expected": {"min_date": "2026-06-01", "max_date": "2026-06-25"},
     "notes": "Colloquial Spanish for current month spend"
+  },
+  {
+    "id": "explicit-range-two-months",
+    "input": "entre el 3 de marzo y el 20 de abril",
+    "now": "2026-06-25T10:00:00-05:00",
+    "expected": {"min_date": "2026-03-03", "max_date": "2026-04-20"},
+    "notes": "Specific partial-month range — outside reporting_agent's deterministic rule set, exercises the Claude fallback path"
   }
 ]

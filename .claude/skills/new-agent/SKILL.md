@@ -5,16 +5,53 @@ description: Reusable pattern for adding a new specialist agent (income, reporti
 
 # Adding a new agent
 
-This codebase has two specialist agents so far: `expense_agent.py` (Phase 1) and
-`income_agent.py` (Phase 2) of `docs/agent-architecture.md`. This skill extracts the
-pattern they established so `reporting_agent.py`, etc. follow it exactly instead of
-reinventing shape or conventions per agent. `income_agent.py` is also the concrete
-reference for what happens once a *second* agent exists — read it alongside
-`expense_agent.py` wherever this skill says "once the second agent lands."
+This codebase has three specialist agents so far: `expense_agent.py` (Phase 1),
+`income_agent.py` (Phase 2), and `reporting_agent.py` (Phase 3) of
+`docs/agent-architecture.md`. This skill extracts the patterns they established so the
+next agent follows one of them exactly instead of reinventing shape or conventions.
+`income_agent.py` is the concrete reference for what happens once a *second* agent
+exists (§3's orchestrator wiring); `reporting_agent.py` is the concrete reference for
+the second *shape* of agent (§0) — read whichever one matches what you're building.
 
 Read `docs/agent-architecture.md` first for the full architectural context (deviations
 from the original design, what's shipped vs. planned). This skill is the tactical
 "how do I build one" companion to that document.
+
+## 0. Two agent shapes — pick before you start
+
+**Extract-and-persist** (`expense_agent.py`, `income_agent.py`): free text → Claude
+forced tool-use → new row(s) written to the database → confirmation reply. §§1–5 below
+are written for this shape by default.
+
+**Read-and-aggregate** (`reporting_agent.py`): free text → resolve query parameters →
+read *existing* rows → format a summary reply. **No persistence at all.** If your new
+agent reads/summarizes rather than creates records (a future budgets agent, a
+"what did I spend the most on" analysis agent, etc.), it's this shape — don't force the
+extract-and-persist template onto it. Concrete divergences `reporting_agent.py` had to
+make, all worth checking against your own agent:
+
+- **No `save_<x>` call, ever.** `AgentResponse.data` holds the *query results* (whatever
+  you read from the database) — reinterpreting that field's meaning from "persisted row
+  trace" to "what this reply was built from." Nothing else about the contract changes.
+- **Claude is a fallback, not the primary path — check whether you need it at all
+  first.** `reporting_agent.py`'s core insight: date-range resolution is a small,
+  enumerable set of patterns computable exactly in Python (`_resolve_deterministic`,
+  zero LLM calls, zero variance) — Claude only gets called for phrasing outside that set.
+  Before reaching for forced tool-use as the default (like §2 below assumes), ask
+  whether your agent's input space is actually *open-ended* free text (expense/income:
+  yes, genuinely unbounded) or a *small closed set of phrasings* (dates: no, "last week"
+  has finitely many reasonable meanings). The cost-awareness constraint in CLAUDE.md
+  cuts both ways — don't skip Claude where it's needed, but don't reach for it by habit
+  where deterministic code is strictly more reliable *and* free. If you do need a
+  fallback, it's still forced tool-use, same as §2 — just gated behind a deterministic
+  check that returns `None` to signal "no match, fall back."
+- **No `_estimate_confidence`, no `date`/`source` stamping loop.** There's no new row
+  being built field-by-field — the "row" is the query itself (e.g. a date range), not a
+  list of extracted items.
+- **Reuses formatting/query code that predates the agent architecture entirely.**
+  `reporting_agent.py` calls `reporting.format_report` and `database.get_expenses`
+  completely unchanged — if equivalent read/format functions already exist for your
+  domain, this shape is often *less* new code than extract-and-persist, not more.
 
 ## 1. The contract — `src/agent_types.py`
 
@@ -156,8 +193,8 @@ Phase 1's `orchestrator.py` was single-agent dispatch, no routing decision at al
 copy this pattern, don't design a new one:
 
 ```python
-# orchestrator.py, as of Phase 2
-from parser import _normalize
+# orchestrator.py, as of Phase 3
+from parser import _normalize, is_report_request
 
 _INCOME_KEYWORDS_PHRASE = [...]   # phrase-level, see the real list for why
 
@@ -166,10 +203,26 @@ def is_income_request(text: str) -> bool:
     return any(kw in normalized for kw in _INCOME_KEYWORDS_PHRASE)
 
 def handle_message(request: AgentRequest) -> AgentResponse:
+    if is_report_request(request.text):
+        return reporting_agent.handle(request)
     if is_income_request(request.text):
         return income_agent.handle(request)
     return expense_agent.handle(request)
 ```
+
+**Priority order matters and isn't arbitrary.** Report is checked first because it can
+describe another domain without being that domain's agent's job — "resumen de mis
+ingresos" (income summary) is a report *about* income, not an instruction to log new
+income; if `is_income_request` ran first and happened to match, that would be wrong.
+When adding a new deterministic signal, think through whether it can co-occur with an
+existing one in a message that should route to the *new* signal's agent, and order
+accordingly — don't just append your check at the end by default.
+
+**`reporting_agent`'s dispatch trigger wasn't newly written in `orchestrator.py` at
+all** — `is_report_request` already existed in `parser.py` (it used to gate an inline
+branch in `handler.py`, pre-orchestrator) and was reused unchanged. Check whether your
+new agent's routing signal already exists somewhere as a keyword function before writing
+a new one — this was true for report, not for income.
 
 **A routing signal has to come from somewhere. Options, cheapest first:**
 1. **Deterministic/keyword signal**, if one exists — this is what income used.
@@ -227,9 +280,10 @@ For the orchestrator dispatch, extend `tests/test_orchestrator.py`'s pattern —
 new agent module, assert `handle_message` reaches it under the right routing condition.
 
 For `handler.py` wiring, extend `tests/test_handler.py`: at minimum, a test that the new
-message path reaches the orchestrator/agent and persists+replies, and a test that
-`orchestrator.handle_message` is **not** called for message shapes that should route
-elsewhere (mirrors `TestExcelAndReportBypassOrchestrator`). Keep the error-contract test
+message path reaches the orchestrator/agent and replies (plus persists, for an
+extract-and-persist agent), and — for anything that still bypasses the orchestrator
+entirely (only Excel does, as of Phase 3) — a test that `orchestrator.handle_message` is
+**not** called (`TestExcelBypassesOrchestrator`). Keep the error-contract test
 (`TestErrorContract`) and duplicate-message test (`TestDuplicateMessage`) passing — these
 assert the pipeline-wide guarantees that must hold regardless of which agent handled the
 message.
@@ -271,21 +325,42 @@ from `_run_scored_dataset`/`_run_parse_expense`/`_run_expense_agent`/`_run_incom
 5. Print the new section side-by-side with the old path's section in the same run, so the
    comparison is visible in one invocation, not two separate commands.
 
+**If your agent isn't expense-shaped** (a read-and-aggregate agent, or any output shape
+`score_expense` doesn't fit), don't force it through `_run_scored_dataset` — write a
+sibling pair the same way `reporting_agent` did: `evals/scoring.py`'s `score_date_range`
+already existed for `{min_date, max_date}` output, so a parallel
+`_run_date_range_dataset(dataset_name, resolve_fn)` was added next to
+`_run_scored_dataset`, same shared-helper principle, different scoring function. Reuse
+`score_date_range`/`_run_date_range_dataset` directly if your agent also resolves a date
+range (a future budgets or analytics agent might); write a new scorer + runner pair only
+if the output shape is genuinely new, not just to avoid a two-line addition to an
+existing one.
+
 ## Checklist for a new `<x>_agent.py`
 
-- [ ] `config.py`: add the Claude model constant if a new tier is needed
-- [ ] `database.py`: `save_<x>` following `save_expense`'s signature convention, reusing
-      the relevant existing table if one already exists (check `scripts/setup_db.sql` —
-      e.g. `incomes` already exists from Phase 0, don't re-propose it)
-- [ ] `whatsapp.py`: `format_<x>_confirmation` if the reply shape differs from expense's
-- [ ] `<x>_agent.py`: tool schema + forced tool-use extraction, `handle()`, reusing
-      `_estimate_confidence` and date-stamping in Python, zero internal try/except
-- [ ] `orchestrator.py`: wire in dispatch — deterministic signal first, classification
-      call only if genuinely needed (see §3)
+First: which shape is this (§0)? The checklist below is written for extract-and-persist;
+skip the persistence-specific items (marked) for a read-and-aggregate agent.
+
+- [ ] `config.py`: add the Claude model constant if a new tier is needed — check §0
+      first whether you need Claude as the *primary* path at all, or only a fallback
+- [ ] *(extract-and-persist only)* `database.py`: `save_<x>` following `save_expense`'s
+      signature convention, reusing the relevant existing table if one already exists
+      (check `scripts/setup_db.sql`); *(read-and-aggregate)* reuse the existing
+      `get_<x>`/format function instead — don't write a new persistence function
+- [ ] `whatsapp.py`: `format_<x>_confirmation` if the reply shape differs from an
+      existing formatter (`reporting.format_report` was reused unchanged for reporting)
+- [ ] `<x>_agent.py`: forced tool-use extraction (primary, or fallback-only per §0),
+      `handle()`, zero internal try/except; *(extract-and-persist)* reuse
+      `_estimate_confidence` and date-stamp in Python
+- [ ] `orchestrator.py`: wire in dispatch — deterministic signal first, checked in the
+      right priority order relative to existing signals (see §3), classification call
+      only if genuinely needed
 - [ ] `handler.py`: route the relevant message path through the orchestrator; leave
       unrelated branches untouched
 - [ ] `tests/test_<x>_agent.py`, extend `test_orchestrator.py` and `test_handler.py`
-- [ ] `evals/run.py`: shared dataset-runner helper, `_run_<x>_agent`, key-gated section,
+- [ ] `evals/run.py`: shared dataset-runner helper (`_run_scored_dataset` for
+      expense-shaped output, `_run_date_range_dataset` for date-range output, or a new
+      pair if the shape is genuinely new), `_run_<x>_agent`, key-gated section,
       threshold set from an observed live run — not guessed
 - [ ] `docs/agent-architecture.md`: move the agent from "Planned" to "Shipped" in the
       module/model tables, note any deviations the way Phase 1's are documented
