@@ -1,4 +1,12 @@
-# Agentic Architecture — Master Plan
+# Agentic Architecture — Master Plan (superseded past Phase 0)
+
+> **Superseded.** [`docs/agent-architecture.md`](../agent-architecture.md) is now the
+> source of truth for everything past Phase 0 — it uses Claude instead of OpenAI, and a
+> different orchestrator/agent shape than the planner/handoff pattern below. **Phase 0 as
+> described here is real, shipped work and is not retracted**: the `users`, `categories`,
+> and `conversation_turns` tables it introduced are exactly what
+> `docs/agent-architecture.md` builds on. Read this document for Phase-0 history and
+> rationale; read the other one for what's actually being built next.
 
 This is the **living design document** for evolving Finance Tracker from a stateless
 expense logger into a conversational, multi-agent personal-finance assistant.

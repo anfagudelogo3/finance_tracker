@@ -23,15 +23,16 @@ It also understands **voice notes** and **photos of receipts**, and can produce
 
 | Document | What it covers |
 |----------|----------------|
-| [design/agentic-architecture.md](design/agentic-architecture.md) | Master plan: multi-agent orchestration, data model, phased roadmap, review cadence |
+| [agent-architecture.md](../agent-architecture.md) | **Source of truth.** Orchestrator/agent contract, Claude migration, phased rollout |
+| [design/agentic-architecture.md](design/agentic-architecture.md) | Superseded past Phase 0 — kept for Phase-0 history (the `users`/`categories`/`conversation_turns` schema this shipped is still current) |
 | [design/open-challenges.md](design/open-challenges.md) | Deferred capabilities: proactive scheduled alerts, Gmail/bank income |
 
 ## At a glance
 
 ```
-WhatsApp ──> Twilio ──> Lambda Function URL ──> OpenAI ──> Neon (PostgreSQL)
-   ▲                         │                                    │
-   └─────── confirmation ────┴──── media stored in S3 ────────────┘
+WhatsApp ──> Twilio ──> Lambda Function URL ──> OpenAI / Claude ──> Neon (PostgreSQL)
+   ▲                         │                                          │
+   └─────── confirmation ────┴──── media stored in S3 ──────────────────┘
 ```
 
 | Component | Technology |
@@ -39,7 +40,7 @@ WhatsApp ──> Twilio ──> Lambda Function URL ──> OpenAI ──> Neon 
 | Channel | Twilio WhatsApp Sandbox → WhatsApp Cloud API (Meta) in production |
 | Compute | AWS Lambda + Function URL |
 | Language | Python 3.12 |
-| Parsing | OpenAI `gpt-4o-mini` (text), `gpt-4o` (vision), `whisper-1` (audio) |
+| Parsing | Claude `claude-haiku-4-5-20251001` (expense text/audio-transcript); OpenAI `gpt-4o` (expense image, still migrating), `gpt-4o-mini` (report date-range parsing, still migrating), `whisper-1` (audio transcription, permanent) |
 | Database | Neon (serverless PostgreSQL) |
 | Media / exports | AWS S3 |
 | Package manager | uv |

@@ -86,6 +86,14 @@ order (first match wins):
 > Because Excel is checked first, a message that contains both an export verb and a
 > report word (e.g. "exportame el resumen") is treated as an **Excel** request.
 
+**Expense dispatch, since [agent-architecture.md](agent-architecture.md) Phase 1:** the
+three keyword-routed branches above are unchanged, but the expense branch now splits by
+message type. Text and audio-transcript messages build an `AgentRequest` and go through
+`orchestrator.handle_message` → `expense_agent.handle` (Claude, forced tool-use
+extraction). Image messages are unchanged — still `parser.parse_expense_from_image`
+(OpenAI vision) called directly from `handler.py`. See `agent-architecture.md` for why the
+split is scoped this way and what's still planned.
+
 ## External services
 
 | Service | Used for | Auth |

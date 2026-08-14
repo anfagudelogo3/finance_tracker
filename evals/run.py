@@ -20,16 +20,29 @@ from pathlib import Path
 # evals/__init__.py bootstraps sys.path and dummy env vars before src imports.
 from tracing import setup_tracing
 from parser import parse_expense, parse_report_request
+from expense_agent import _extract as _extract_expense_claude
+from config import DEFAULT_EXPENSE_CATEGORIES
 from evals.scoring import score_expense, score_date_range
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
 
 # Minimum accuracy required per metric when --check is passed.
+#
+# "expense_agent" (Claude) thresholds are set with headroom below the observed
+# claude-haiku-4-5-20251001 run against parse_expense.json (n=15): 100% overall,
+# 100% amount, 100% category. Not pinned to 100% — that's a small sample, and a
+# single new eval case or minor prompt change shouldn't break --check on one miss.
+# Re-tighten as the dataset grows and the number stays stable.
 THRESHOLDS: dict[str, dict[str, float]] = {
     "parse_expense": {
         "overall": 0.85,
         "amount": 0.95,
         "category": 0.85,
+    },
+    "expense_agent": {
+        "overall": 0.90,
+        "amount": 0.95,
+        "category": 0.90,
     },
     "parse_report_request": {
         "overall": 0.90,
@@ -43,11 +56,15 @@ def _load_dataset(name: str) -> list[dict]:
     return json.loads((DATASETS_DIR / f"{name}.json").read_text())
 
 
-def _run_parse_expense() -> tuple[list[dict], dict]:
+def _run_expense_dataset(extract_fn) -> tuple[list[dict], dict]:
+    """Run the parse_expense dataset through any side-effect-free extraction
+    function of shape (text: str) -> list[dict], and score the results.
+    Shared by the OpenAI and Claude expense paths so they're scored identically.
+    """
     cases = _load_dataset("parse_expense")
     scores = []
     for case in cases:
-        actual = parse_expense(case["input"])
+        actual = extract_fn(case["input"])
         score = score_expense(actual, case["expected"])
         score["id"] = case["id"]
         scores.append(score)
@@ -67,6 +84,19 @@ def _run_parse_expense() -> tuple[list[dict], dict]:
         metrics[field] = sum(hits) / len(hits)
 
     return scores, metrics
+
+
+def _run_parse_expense() -> tuple[list[dict], dict]:
+    return _run_expense_dataset(parse_expense)
+
+
+def _run_expense_agent() -> tuple[list[dict], dict]:
+    """Same dataset, same scoring, run through the new Claude-based expense agent's
+    extraction step (not handle(), which also persists to Postgres — evals have no
+    live database) — this is the parity comparison against _run_parse_expense."""
+    return _run_expense_dataset(
+        lambda text: _extract_expense_claude(text, DEFAULT_EXPENSE_CATEGORIES)
+    )
 
 
 def _run_parse_report_request() -> tuple[list[dict], dict]:
@@ -149,6 +179,9 @@ def main() -> None:
     if not api_key or api_key == "sk-not-set":
         sys.exit("OPENAI_API_KEY not configured. Add it to your .env file.")
 
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    has_anthropic_key = bool(anthropic_key) and anthropic_key != "sk-ant-not-set"
+
     if setup_tracing():
         print("Phoenix tracing enabled.")
 
@@ -165,6 +198,18 @@ def main() -> None:
     _print_section("parse_report_request", scores_rep, metrics_rep)
     if args.check:
         threshold_failures.extend(_check_thresholds("parse_report_request", metrics_rep))
+
+    if has_anthropic_key:
+        print("\nRunning expense_agent (Claude) against the same dataset for parity...")
+        scores_agent, metrics_agent = _run_expense_agent()
+        _print_section("expense_agent (Claude)", scores_agent, metrics_agent)
+        if args.check:
+            threshold_failures.extend(_check_thresholds("expense_agent", metrics_agent))
+    else:
+        print(
+            "\nSkipping expense_agent (Claude) eval — ANTHROPIC_API_KEY not configured. "
+            "Add it to your .env file to compare the new agent against parse_expense."
+        )
 
     if threshold_failures:
         print(f"\n{'─' * _WIDTH}")

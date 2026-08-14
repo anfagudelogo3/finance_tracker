@@ -7,7 +7,7 @@ _initialized = False
 
 
 def setup_tracing() -> bool:
-    """Set up Phoenix OpenTelemetry tracing for all OpenAI calls.
+    """Set up Phoenix OpenTelemetry tracing for all OpenAI and Claude calls.
 
     Enabled when PHOENIX_TRACING=1 or PHOENIX_COLLECTOR_ENDPOINT is set.
     Idempotent — safe to call multiple times. Fails gracefully when
@@ -29,6 +29,7 @@ def setup_tracing() -> bool:
     try:
         from phoenix.otel import register
         from openinference.instrumentation.openai import OpenAIInstrumentor
+        from openinference.instrumentation.anthropic import AnthropicInstrumentor
 
         endpoint = os.environ.get(
             "PHOENIX_COLLECTOR_ENDPOINT", "http://localhost:6006/v1/traces"
@@ -38,6 +39,7 @@ def setup_tracing() -> bool:
             endpoint=endpoint,
         )
         OpenAIInstrumentor().instrument(tracer_provider=tracer_provider)
+        AnthropicInstrumentor().instrument(tracer_provider=tracer_provider)
 
         _initialized = True
         logger.info("Phoenix tracing enabled → %s", endpoint)
