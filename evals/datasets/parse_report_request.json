@@ -89,5 +89,16 @@
     "now": "2026-06-25T10:00:00-05:00",
     "expected": {"min_date": "2026-03-03", "max_date": "2026-04-20"},
     "notes": "Specific partial-month range — outside reporting_agent's deterministic rule set, exercises the Claude fallback path"
+  },
+  {
+    "id": "followup-anterior",
+    "input": "¿y la anterior?",
+    "now": "2026-06-25T10:00:00-05:00",
+    "conversation": [
+      {"role": "user", "content": "cuánto gasté esta semana"},
+      {"role": "assistant", "content": "📊 Resumen 22 jun – 25 jun 2026:\n\n  comida: COP 45.000 (2 gastos)\nTotal: COP 45.000 — 2 gastos"}
+    ],
+    "expected": {"min_date": "2026-06-15", "max_date": "2026-06-21"},
+    "notes": "Referential follow-up — no date content of its own, requires conversation history (Phase 4). Deterministic rules alone would incorrectly default to first-of-month before the referential-word fix; the old parse_report_request path (no conversation param) can't resolve this at all."
   }
 ]

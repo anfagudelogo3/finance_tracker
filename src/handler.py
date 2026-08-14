@@ -30,6 +30,7 @@ from database import (
     get_or_create_user,
     get_user_categories,
     save_turn,
+    load_recent_turns,
 )
 from media import store_all_media
 from whatsapp import send_message, send_document, format_confirmation
@@ -80,7 +81,9 @@ def _parse_form_body(event: dict) -> dict:
     return {k: v[0] for k, v in parsed.items()}
 
 
-def _dispatch_and_reply(user_id, message, msg_type, agent_text, message_id, now):
+def _dispatch_and_reply(
+    user_id, message, msg_type, agent_text, message_id, now, conversation
+):
     """Build an AgentRequest, dispatch through the orchestrator, and send the reply.
 
     Shared by the report branch and the general expense/income branch — both just
@@ -94,7 +97,7 @@ def _dispatch_and_reply(user_id, message, msg_type, agent_text, message_id, now)
         media=[],
         message_type=msg_type,
         now=now,
-        conversation=[],
+        conversation=conversation,
     )
     agent_response = orchestrator.handle_message(agent_request)
 
@@ -147,6 +150,10 @@ def _handle_message(event):
             return {"statusCode": 200, "body": ""}
         logger.info("Message saved with id=%d for user=%d", message_id, user_id)
 
+        # Load conversation history BEFORE recording this message's own turn, so it
+        # naturally excludes the message currently being processed.
+        conversation = load_recent_turns(user_id)
+
         # Record the inbound turn for short-term conversation memory
         save_turn(user_id, "user", message["text"] or f"[{_get_message_type(message)}]")
 
@@ -186,7 +193,13 @@ def _handle_message(event):
         if is_report_request(message["text"]):
             logger.info("Report request detected from %s", message["phone"])
             return _dispatch_and_reply(
-                user_id, message, msg_type, message["text"], message_id, now
+                user_id,
+                message,
+                msg_type,
+                message["text"],
+                message_id,
+                now,
+                conversation,
             )
 
         # Image expense branch — unchanged, still the old OpenAI vision path
@@ -232,7 +245,7 @@ def _handle_message(event):
             agent_text = message["text"]
 
         return _dispatch_and_reply(
-            user_id, message, msg_type, agent_text, message_id, now
+            user_id, message, msg_type, agent_text, message_id, now, conversation
         )
 
     except Exception:

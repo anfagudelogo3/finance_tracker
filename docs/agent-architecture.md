@@ -423,11 +423,13 @@ def load_recent_turns(
 Simpler than what this section originally sketched — no `intent` column, no `message_id`
 FK on the turn itself, and the hybrid cutoff is already implemented as
 `CONVERSATION_MAX_TURNS`/`CONVERSATION_WINDOW_MINUTES` in `config.py` (8 turns / 30
-minutes, not the 10 turns / 24 hours floated below — the shipped defaults, tune from
-there). What Phase 4 actually adds: passing `load_recent_turns(user_id)`'s output into
-`AgentRequest.conversation` (currently always `[]`) and having an agent use it — the
-reporting agent, for follow-ups like "¿y la semana pasada?", is the concrete payoff this
-section originally described.
+minutes, not the 10 turns / 24 hours floated below — the shipped defaults, kept
+unchanged by Phase 4 rather than re-tuned; see §9's Phase 4 section). **Shipped:**
+`load_recent_turns(user_id)`'s output is threaded into `AgentRequest.conversation`
+(previously always `[]`), consumed by `reporting_agent` for referential follow-ups like
+"¿y la anterior?" — see §9 for what that actually took (a real bug fix, not just wiring)
+and why the doc's original example, "¿y la semana pasada?", turned out not to need this
+at all.
 
 ### Context-window strategy: hybrid cutoff
 
@@ -609,14 +611,49 @@ bug fix. Revisit as explicit follow-up work.
 **Onboarding chat (§6)** still needs its design redone against the real `users`/
 `categories` schema before it's built — not scheduled, revisit when there's appetite.
 
-### Phase 4 — Conversational memory (consumption)
+### Phase 4 — Conversational memory (consumption) — **shipped, `feature/phase-4-conversational-memory`**
 
-- No new table — `conversation_turns`, `save_turn`, `load_recent_turns` already exist and
-  are already being called on every message (Phase 0).
-- `AgentRequest.conversation` (currently always `[]`) gets populated from
-  `load_recent_turns(user_id)`.
-- Reporting agent is the first to actually use it (follow-up report requests, e.g. "¿y la
-  semana pasada?").
+- No new table, no `save_turn`/`load_recent_turns` changes — both already existed
+  (Phase 0). `handler._handle_message` calls `load_recent_turns(user_id)` (default
+  window: `CONVERSATION_MAX_TURNS=8`, `CONVERSATION_WINDOW_MINUTES=30`, unchanged from
+  Phase 0 — this phase wires up consumption, not retention policy) once, right after the
+  duplicate-message check passes and **before** the inbound `save_turn` call — ordering
+  that matters, since calling it after would include the message currently being
+  processed as its own most-recent "history" entry. The result is threaded through
+  `_dispatch_and_reply` into `AgentRequest.conversation` for both the report branch and
+  the general expense/income branch (Excel and image still don't reach this).
+- **Your example, "¿y la semana pasada?", turned out to need no conversation context at
+  all** — `_LAST_WEEK_PHRASES` already matches it as a self-sufficient phrase regardless
+  of what came before. The real target, and the thing this phase actually had to fix, is
+  a genuinely referential follow-up like *"¿y la anterior?"* ("and the previous one?"),
+  which has no date content of its own. Before this phase, that fell through every
+  `_resolve_deterministic` rule and silently returned the first-of-month default — the
+  exact silent-wrong-default failure mode Phase 3 was built to eliminate, in a new shape.
+  Fix: a referential-signal-word check (`"anterior"`, `"esa misma"`, `"eso"`, `"la
+  misma"`, `"previous"`, `"that"`, `"same"`) added to `_resolve_deterministic`, bailing
+  to the Claude fallback instead of guessing.
+- **`resolve_date_range(text, now, conversation=None)`** — new third parameter,
+  defaulted so no Phase 3 call site needed touching. Only `_resolve_with_claude` uses
+  it, as real multi-turn `messages` (prior turns, then the current query) — not folded
+  into the system prompt. The deterministic-vs-Claude split from Phase 3 holds exactly:
+  self-sufficient phrases (including follow-up-shaped ones) still resolve at zero cost;
+  only genuinely referential text pays for a call, and that call now has what it needs
+  to answer correctly — including dates already stated in a previous report's own text
+  (`format_report`'s header embeds them, e.g. "📊 Resumen 22 jun – 25 jun 2026:"; no
+  structured side-channel was needed).
+- **Expense/income agents confirmed unaffected, by inspection, not assumption:** neither
+  `expense_agent.handle()` nor `income_agent.handle()` references `request.conversation`
+  anywhere, and their evals (`_run_expense_agent`/`_run_income_agent`) call `_extract`
+  directly, never constructing an `AgentRequest` — conversation wiring can't reach their
+  numbers structurally. Confirmed empirically too: both scored the same 100% after this
+  phase as before it.
+- **Eval dataset gained an optional `conversation` key** (same `{role, content}` shape),
+  exercised by one new case, `followup-anterior` — `evals/run.py`'s
+  `_run_date_range_dataset` generalized to pass the whole case dict to `resolve_fn`
+  rather than just `(input, now)`, so a wrapper can pull extra fields. The old
+  `parse_report_request` path ignores the new key (it has no conversation param and
+  never will — Excel still depends on it, unchanged) and fails this one case as expected,
+  not a regression.
 
 ## 10. Open questions / risks
 
