@@ -9,6 +9,9 @@ are unchanged — this is entirely about what happens after `handler._handle_mes
 verified, authorized, saved message in hand. See [architecture.md](architecture.md) for
 the pipeline this replaces.
 
+**What's next:** Phases 5+ (router agent, guardrails, corrections, channels) are planned in
+[agent-roadmap.md](agent-roadmap.md).
+
 **Relationship to prior design work:** an earlier, separate design effort
 (`docs/design/agentic-architecture.md`) shipped a real "Phase 0" foundation directly on
 `main` before this document existed: a `users` table (identity, auto-provisioned from the
