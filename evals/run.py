@@ -24,8 +24,10 @@ from parser import parse_expense, parse_report_request
 from expense_agent import _extract as _extract_expense_claude
 from income_agent import _extract as _extract_income_claude
 from reporting_agent import resolve_date_range
+from orchestrator import is_income_request
+from parser import is_report_request
 from config import DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES
-from evals.scoring import score_expense, score_date_range
+from evals.scoring import score_expense, score_date_range, score_routing
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
 
@@ -77,7 +79,7 @@ THRESHOLDS: dict[str, dict[str, float]] = {
 
 
 def _load_dataset(name: str) -> list[dict]:
-    return json.loads((DATASETS_DIR / f"{name}.json").read_text())
+    return json.loads((DATASETS_DIR / f"{name}.json").read_text(encoding="utf-8"))
 
 
 def _run_scored_dataset(dataset_name: str, extract_fn) -> tuple[list[dict], dict]:
@@ -189,6 +191,98 @@ def _run_reporting_agent() -> tuple[list[dict], dict]:
     )
 
 
+# Tags reported as their own accuracy rows in routing evals.
+_ROUTING_TAG_METRICS = [
+    "single",
+    "multi-intent",
+    "ambiguous",
+    "off-topic",
+    "smalltalk",
+    "adversarial",
+    "follow-up",
+    "business",
+    "users",
+]
+
+# Every route_message.json case carries a profile; the same text can route differently
+# for a personal user and a business (e.g. "almuerzo 20 mil" at a restaurant).
+_PROFILE_TYPES = ["personal", "business"]
+
+
+def _run_routing_dataset(route_fn) -> tuple[list[dict], dict]:
+    """Run route_message.json through any function of shape (case: dict) -> dict
+    returning {"route", "agents", optional "via"}, and score with score_routing.
+
+    Cases carrying a "skip" key (capability not built yet, e.g. Phase 7 corrections)
+    are left out. When route_fn reports "via": "fast_path", fast-path precision and
+    coverage are added — a fast path has no LLM behind it to catch its mistakes, so
+    its precision is the number that matters most.
+    """
+    cases = [c for c in _load_dataset("route_message") if "skip" not in c]
+    scores = []
+    for case in cases:
+        actual = route_fn(case)
+        score = score_routing(actual, case["expected"])
+        score["id"] = case["id"]
+        score["tags"] = case.get("tags", [])
+        score["profile"] = case["profile"]["type"]
+        score["via"] = actual.get("via")
+        scores.append(score)
+
+    n = len(scores)
+    metrics: dict[str, int | float] = {
+        "n": n,
+        "overall": sum(1 for s in scores if s["all_correct"]) / n,
+    }
+
+    # A real finance message refused by the router is a lost record.
+    should_delegate = [s for s in scores if s["route"]["expected"] == "agents"]
+    if should_delegate:
+        metrics["no_false_decline"] = sum(
+            1 for s in should_delegate if s["route"]["actual"] != "decline"
+        ) / len(should_delegate)
+
+    for profile_type in _PROFILE_TYPES:
+        profiled = [s for s in scores if s["profile"] == profile_type]
+        if profiled:
+            metrics[f"profile:{profile_type}"] = sum(
+                1 for s in profiled if s["all_correct"]
+            ) / len(profiled)
+
+    for tag in _ROUTING_TAG_METRICS:
+        tagged = [s for s in scores if tag in s["tags"]]
+        if tagged:
+            metrics[tag] = sum(1 for s in tagged if s["all_correct"]) / len(tagged)
+
+    fast = [s for s in scores if s["via"] == "fast_path"]
+    if fast:
+        metrics["fast_path_precision"] = sum(1 for s in fast if s["all_correct"]) / len(
+            fast
+        )
+        metrics["fast_path_coverage"] = len(fast) / n
+
+    return scores, metrics
+
+
+def _keyword_route(case: dict) -> dict:
+    """Today's (Phase 4) routing, without dispatching: mirrors the decision order in
+    orchestrator.handle_message — report keywords, then income keywords, then the
+    expense default. It can only ever pick exactly one agent, never clarifies or
+    declines, and ignores case["profile"] (today's code has no profile), so this is the
+    "before" baseline for the Phase 5 router. Excel is left out: handler.py checks it
+    before the orchestrator is reached."""
+    text = case["input"]
+    if is_report_request(text):
+        return {"route": "agents", "agents": ["reporting"], "via": "fast_path"}
+    if is_income_request(text):
+        return {"route": "agents", "agents": ["incomes"], "via": "fast_path"}
+    return {"route": "agents", "agents": ["expenses"], "via": "default"}
+
+
+def _run_keyword_routing_baseline() -> tuple[list[dict], dict]:
+    return _run_routing_dataset(_keyword_route)
+
+
 _WIDTH = 54
 
 
@@ -217,7 +311,7 @@ def _print_section(title: str, scores: list[dict], metrics: dict) -> None:
             for field, fdata in exp_score.get("fields", {}).items():
                 if not fdata["correct"]:
                     print(f"      {field}: expected={fdata['expected']!r}  got={fdata['actual']!r}")
-        for field in ("min_date", "max_date"):
+        for field in ("min_date", "max_date", "route", "agents"):
             if field in s and not s[field]["correct"]:
                 print(f"      {field}: expected={s[field]['expected']!r}  got={s[field]['actual']!r}")
 
@@ -265,6 +359,11 @@ def main() -> None:
     _print_section("parse_report_request", scores_rep, metrics_rep)
     if args.check:
         threshold_failures.extend(_check_thresholds("parse_report_request", metrics_rep))
+
+    # Deterministic, no API calls. Informational only — no thresholds: it's the
+    # "before" number the Phase 5 router is measured against, not a gate.
+    scores_route, metrics_route = _run_keyword_routing_baseline()
+    _print_section("routing — keyword baseline (Phase 4)", scores_route, metrics_route)
 
     if has_anthropic_key:
         print("\nRunning expense_agent (Claude) against the same dataset for parity...")

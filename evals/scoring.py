@@ -108,3 +108,39 @@ def score_date_range(actual: dict, expected: dict) -> dict:
             all_correct = False
 
     return {"all_correct": all_correct, **result}
+
+
+def score_routing(actual: dict, expected: dict) -> dict:
+    """Score a routing decision against a route_message.json entry.
+
+    Args:
+        actual:   {"route": "agents" | "clarify" | "decline" | "none",
+                   "agents": [...]}  — agents is order-insensitive.
+        expected: Same shape from the dataset. For non-"agents" routes the expected
+                  agents list is empty, so any delegation alongside a clarify/decline
+                  counts as wrong.
+
+    Returns:
+        {
+            "all_correct": bool,
+            "route":  {"expected": ..., "actual": ..., "correct": bool},
+            "agents": {"expected": [...], "actual": [...], "correct": bool},
+        }
+    """
+    exp_route = expected.get("route")
+    act_route = actual.get("route")
+    route_correct = act_route == exp_route
+
+    exp_agents = sorted(set(expected.get("agents") or []))
+    act_agents = sorted(set(actual.get("agents") or []))
+    agents_correct = act_agents == exp_agents
+
+    return {
+        "all_correct": route_correct and agents_correct,
+        "route": {"expected": exp_route, "actual": act_route, "correct": route_correct},
+        "agents": {
+            "expected": exp_agents,
+            "actual": act_agents,
+            "correct": agents_correct,
+        },
+    }

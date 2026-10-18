@@ -3,9 +3,12 @@
 No LLM calls, no network — runs in the normal test suite (uv run pytest tests/).
 These tests verify the scoring logic itself so the eval harness is trustworthy.
 """
+import json
+from pathlib import Path
+
 import pytest
 
-from evals.scoring import score_expense, score_date_range
+from evals.scoring import score_expense, score_date_range, score_routing
 
 
 # ── score_expense ──────────────────────────────────────────────────────────────
@@ -182,3 +185,108 @@ class TestScoreDateRange:
         )
         assert result["min_date"]["actual"] == "2026-06-02"
         assert result["min_date"]["expected"] == "2026-06-01"
+
+
+# ── score_routing ──────────────────────────────────────────────────────────────
+
+class TestScoreRouting:
+    def test_single_agent_correct(self):
+        result = score_routing(
+            {"route": "agents", "agents": ["expenses"]},
+            {"route": "agents", "agents": ["expenses"]},
+        )
+        assert result["all_correct"] is True
+
+    def test_agents_order_insensitive(self):
+        result = score_routing(
+            {"route": "agents", "agents": ["incomes", "expenses"]},
+            {"route": "agents", "agents": ["expenses", "incomes"]},
+        )
+        assert result["all_correct"] is True
+
+    def test_missing_agent(self):
+        result = score_routing(
+            {"route": "agents", "agents": ["expenses"]},
+            {"route": "agents", "agents": ["expenses", "incomes"]},
+        )
+        assert result["all_correct"] is False
+        assert result["route"]["correct"] is True
+        assert result["agents"]["correct"] is False
+
+    def test_extra_agent(self):
+        result = score_routing(
+            {"route": "agents", "agents": ["expenses", "reporting"]},
+            {"route": "agents", "agents": ["expenses"]},
+        )
+        assert result["agents"]["correct"] is False
+
+    def test_wrong_route_type(self):
+        result = score_routing(
+            {"route": "agents", "agents": ["expenses"]},
+            {"route": "clarify", "agents": []},
+        )
+        assert result["all_correct"] is False
+        assert result["route"]["correct"] is False
+
+    def test_clarify_correct(self):
+        result = score_routing({"route": "clarify"}, {"route": "clarify", "agents": []})
+        assert result["all_correct"] is True
+
+    def test_decline_with_delegation_is_wrong(self):
+        result = score_routing(
+            {"route": "decline", "agents": ["reporting"]},
+            {"route": "decline", "agents": []},
+        )
+        assert result["all_correct"] is False
+        assert result["agents"]["correct"] is False
+
+    def test_none_agents_treated_as_empty(self):
+        result = score_routing(
+            {"route": "none", "agents": None}, {"route": "none", "agents": []}
+        )
+        assert result["all_correct"] is True
+
+
+# ── route_message.json integrity ───────────────────────────────────────────────
+
+_ROUTE_DATASET = (
+    Path(__file__).parent.parent / "evals" / "datasets" / "route_message.json"
+)
+_VALID_ROUTES = {"agents", "clarify", "decline", "none"}
+_VALID_AGENTS = {"expenses", "incomes", "reporting", "users"}
+
+
+class TestRouteMessageDataset:
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return json.loads(_ROUTE_DATASET.read_text(encoding="utf-8"))
+
+    def test_ids_unique(self, cases):
+        ids = [c["id"] for c in cases]
+        assert len(ids) == len(set(ids))
+
+    def test_expected_shape(self, cases):
+        for case in cases:
+            expected = case["expected"]
+            assert expected["route"] in _VALID_ROUTES, case["id"]
+            assert set(expected["agents"]) <= _VALID_AGENTS, case["id"]
+            # Delegation only on the "agents" route, and that route always delegates
+            delegates = expected["route"] == "agents"
+            assert bool(expected["agents"]) == delegates, case["id"]
+
+    def test_profile_shape(self, cases):
+        for case in cases:
+            profile = case["profile"]
+            assert profile["type"] in {"personal", "business"}, case["id"]
+            if profile["type"] == "business":
+                # Classification needs to know what the business sells and pays for
+                assert profile["business"]["industry"], case["id"]
+                assert profile["business"]["description"], case["id"]
+            else:
+                assert "business" not in profile, case["id"]
+
+    def test_conversation_turns_well_formed(self, cases):
+        for case in cases:
+            for turn in case.get("conversation", []):
+                assert turn["role"] in {"user", "assistant"}, case["id"]
+                assert turn["content"], case["id"]
