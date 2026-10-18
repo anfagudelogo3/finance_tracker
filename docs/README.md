@@ -24,6 +24,7 @@ It also understands **voice notes** and **photos of receipts**, and can produce
 | Document | What it covers |
 |----------|----------------|
 | [agent-architecture.md](../agent-architecture.md) | **Source of truth.** Orchestrator/agent contract, Claude migration, phased rollout |
+| [agent-roadmap.md](agent-roadmap.md) | **Next phases (5+).** Router agent (agents-as-tools), loop semantics, guardrails, corrections, email ingestion |
 | [design/agentic-architecture.md](design/agentic-architecture.md) | Superseded past Phase 0 — kept for Phase-0 history (the `users`/`categories`/`conversation_turns` schema this shipped is still current) |
 | [design/open-challenges.md](design/open-challenges.md) | Deferred capabilities: proactive scheduled alerts, Gmail/bank income |
 
