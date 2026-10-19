@@ -16,6 +16,8 @@ from finance_tracker.config import (
     MSG_ERROR,
     MSG_EMPTY_EXPENSE,
     DEFAULT_PROFILE,
+    DEFAULT_CURRENCY,
+    TIMEZONE,
 )
 from finance_tracker.channels.whatsapp.webhook import verify_signature, extract_message
 from finance_tracker.legacy.openai_parser import (
@@ -26,6 +28,7 @@ from finance_tracker.legacy.openai_parser import (
 from finance_tracker.routing.fast_paths import is_excel_request, fast_route
 from finance_tracker.core.agent_types import AgentRequest
 from finance_tracker.routing import orchestrator
+from finance_tracker.agents import onboarding
 from finance_tracker.storage.excel import create_excel_bytes, upload_and_sign
 from finance_tracker.storage.database import (
     save_message,
@@ -87,8 +90,15 @@ def _parse_form_body(event: dict) -> dict:
     return {k: v[0] for k, v in parsed.items()}
 
 
+def _send(user_id: int, phone: str, text: str) -> None:
+    """Send one reply and record it as an assistant turn."""
+    message_sid = send_message(phone, text)
+    logger.info("Reply sent, Twilio SID: %s", message_sid)
+    save_turn(user_id, "assistant", text)
+
+
 def _dispatch_and_reply(
-    user_id, message, msg_type, agent_text, message_id, now, conversation, profile
+    user_id, phone, msg_type, agent_text, message_id, now, conversation, prefs
 ):
     """Build an AgentRequest, dispatch through the orchestrator, and send the reply.
 
@@ -98,21 +108,88 @@ def _dispatch_and_reply(
     agent_request = AgentRequest(
         user_id=user_id,
         message_id=message_id,
-        phone=message["phone"],
+        phone=phone,
         text=agent_text,
         media=[],
         message_type=msg_type,
         now=now,
         conversation=conversation,
-        profile=profile,
+        profile=prefs.get("profile") or dict(DEFAULT_PROFILE),
+        default_currency=prefs.get("default_currency") or DEFAULT_CURRENCY,
     )
     agent_response = orchestrator.handle_message(agent_request)
-
-    message_sid = send_message(message["phone"], agent_response.reply_text)
-    logger.info("Confirmation sent, Twilio SID: %s", message_sid)
-    save_turn(user_id, "assistant", agent_response.reply_text)
-
+    _send(user_id, phone, agent_response.reply_text)
     return {"statusCode": 200, "body": ""}
+
+
+def _route(
+    user_id, phone, msg_type, text, message_id, now, conversation, prefs,
+    stored_media=(), caption="",
+):
+    """Intent routing for one message (first match wins). Also used to replay the
+    message held during onboarding, with that message's own id and timestamp."""
+    profile = prefs.get("profile") or dict(DEFAULT_PROFILE)
+
+    # Excel export branch
+    if is_excel_request(text):
+        logger.info("Excel export request detected from %s", phone)
+        date_range = parse_report_request(text, now)
+        logger.info(
+            "Excel date range: %s to %s",
+            date_range["min_date"], date_range["max_date"],
+        )
+        expenses = get_expenses(user_id, date_range["min_date"], date_range["max_date"])
+        logger.info("Fetched %d expense(s) for Excel export", len(expenses))
+        excel_bytes = create_excel_bytes(expenses)
+        filename = f"gastos_{date_range['min_date']}_{date_range['max_date']}.xlsx"
+        presigned_url = upload_and_sign(
+            excel_bytes, phone, date_range["min_date"], date_range["max_date"]
+        )
+        message_sid = send_document(phone, presigned_url, filename)
+        logger.info("Excel sent, Twilio SID: %s", message_sid)
+        save_turn(user_id, "assistant", f"[excel] {filename}")
+        return {"statusCode": 200, "body": ""}
+
+    # Report branch — only the narrowed fast path (personal profile, single intent);
+    # anything else that looks like a report reaches the router via the orchestrator
+    if fast_route(text, profile, conversation) == "reporting":
+        logger.info("Report request detected from %s", phone)
+        return _dispatch_and_reply(
+            user_id, phone, msg_type, text, message_id, now, conversation, prefs
+        )
+
+    # Image expense branch — unchanged, still the old OpenAI vision path
+    if msg_type == "image":
+        expense_categories = get_user_categories(user_id, kind="expense")
+        media_item = stored_media[0]
+        expenses = parse_expense_from_image(
+            media_item["bytes"],
+            media_item["content_type"],
+            caption=caption,
+            categories=expense_categories,
+        )
+        logger.info("Parsed %d expense(s) from message id=%d (source=image)", len(expenses), message_id)
+
+        if not expenses:
+            logger.info("No expenses parsed from message id=%d, sending fallback reply", message_id)
+            _send(user_id, phone, MSG_EMPTY_EXPENSE)
+            return {"statusCode": 200, "body": ""}
+
+        for expense in expenses:
+            expense["source"] = "image"
+            expense_id = save_expense(message_id, expense, user_id)
+            logger.info(
+                "Expense saved: id=%d amount=%s category=%s confidence=%s source=image",
+                expense_id, expense.get("amount"), expense.get("category"), expense.get("confidence"),
+            )
+
+        _send(user_id, phone, format_confirmation(expenses))
+        return {"statusCode": 200, "body": ""}
+
+    # Text / audio expense/income branch — dispatched via the orchestrator
+    return _dispatch_and_reply(
+        user_id, phone, msg_type, text, message_id, now, conversation, prefs
+    )
 
 
 def _handle_message(event):
@@ -161,8 +238,8 @@ def _handle_message(event):
         # naturally excludes the message currently being processed.
         conversation = load_recent_turns(user_id)
 
-        # Profile drives routing (business messages always go to the router)
-        profile = get_user_prefs(user_id).get("profile") or dict(DEFAULT_PROFILE)
+        # Latest preferences: profile (drives routing), currency, onboarding state
+        prefs = get_user_prefs(user_id)
 
         # Record the inbound turn for short-term conversation memory
         save_turn(user_id, "user", message["text"] or f"[{_get_message_type(message)}]")
@@ -173,91 +250,36 @@ def _handle_message(event):
             stored_media = store_all_media(message["phone"], message["message_id"], message["media"])
             logger.info("Stored %d media file(s) to S3", len(stored_media))
 
-        now = datetime.now(ZoneInfo("America/Bogota")).isoformat()
+        now = datetime.now(ZoneInfo(TIMEZONE)).isoformat()
         msg_type = _get_message_type(message)
         logger.info("Message type: %s", msg_type)
 
-        # Excel export branch
-        if is_excel_request(message["text"]):
-            logger.info("Excel export request detected from %s", message["phone"])
-            date_range = parse_report_request(message["text"], now)
-            logger.info(
-                "Excel date range: %s to %s",
-                date_range["min_date"], date_range["max_date"],
-            )
-            expenses = get_expenses(
-                user_id, date_range["min_date"], date_range["max_date"]
-            )
-            logger.info("Fetched %d expense(s) for Excel export", len(expenses))
-            excel_bytes = create_excel_bytes(expenses)
-            filename = f"gastos_{date_range['min_date']}_{date_range['max_date']}.xlsx"
-            presigned_url = upload_and_sign(
-                excel_bytes, message["phone"], date_range["min_date"], date_range["max_date"]
-            )
-            message_sid = send_document(message["phone"], presigned_url, filename)
-            logger.info("Excel sent, Twilio SID: %s", message_sid)
-            save_turn(user_id, "assistant", f"[excel] {filename}")
-            return {"statusCode": 200, "body": ""}
-
-        # Report branch — only the narrowed fast path (personal profile, single intent);
-        # anything else that looks like a report reaches the router via the orchestrator
-        if fast_route(message["text"], profile, conversation) == "reporting":
-            logger.info("Report request detected from %s", message["phone"])
-            return _dispatch_and_reply(
-                user_id,
-                message,
-                msg_type,
-                message["text"],
-                message_id,
-                now,
-                conversation,
-                profile,
-            )
-
-        # Image expense branch — unchanged, still the old OpenAI vision path
-        if msg_type == "image":
-            expense_categories = get_user_categories(user_id, kind="expense")
-            media_item = stored_media[0]
-            expenses = parse_expense_from_image(
-                media_item["bytes"],
-                media_item["content_type"],
-                caption=message["text"],
-                categories=expense_categories,
-            )
-            logger.info("Parsed %d expense(s) from message id=%d (source=image)", len(expenses), message_id)
-
-            if not expenses:
-                logger.info("No expenses parsed from message id=%d, sending fallback reply", message_id)
-                send_message(message["phone"], MSG_EMPTY_EXPENSE)
-                save_turn(user_id, "assistant", MSG_EMPTY_EXPENSE)
-                return {"statusCode": 200, "body": ""}
-
-            for expense in expenses:
-                expense["source"] = "image"
-                expense_id = save_expense(message_id, expense, user_id)
-                logger.info(
-                    "Expense saved: id=%d amount=%s category=%s confidence=%s source=image",
-                    expense_id, expense.get("amount"), expense.get("category"), expense.get("confidence"),
-                )
-
-            confirmation = format_confirmation(expenses)
-            message_sid = send_message(message["phone"], confirmation)
-            logger.info("Confirmation sent, Twilio SID: %s", message_sid)
-            save_turn(user_id, "assistant", confirmation)
-            return {"statusCode": 200, "body": ""}
-
-        # Text / audio expense/income branch — dispatched via the orchestrator
+        # Voice notes are transcribed first: onboarding answers can be voice notes too
         if msg_type == "audio":
             media_item = stored_media[0]
             ext = media_item["ext"]
             transcript = transcribe_audio(media_item["bytes"], filename=f"audio.{ext}")
             update_message_transcript(message_id, transcript)
-            agent_text = f"{transcript} {message['text']}".strip()
+            text = f"{transcript} {message['text']}".strip()
         else:
-            agent_text = message["text"]
+            text = message["text"]
 
-        return _dispatch_and_reply(
-            user_id, message, msg_type, agent_text, message_id, now, conversation, profile
+        # Onboarding blocks everything else until it's done or skipped (Phase 6b)
+        outcome = onboarding.handle(user_id, prefs, text, msg_type, message_id, now)
+        if outcome.handled:
+            for reply in outcome.replies:
+                _send(user_id, message["phone"], reply)
+            if outcome.replay is None:
+                return {"statusCode": 200, "body": ""}
+            held = outcome.replay
+            return _route(
+                user_id, message["phone"], held["message_type"], held["text"],
+                held["message_id"], held["now"], [], outcome.prefs,
+            )
+
+        return _route(
+            user_id, message["phone"], msg_type, text, message_id, now, conversation,
+            outcome.prefs, stored_media=stored_media, caption=message["text"],
         )
 
     except Exception:

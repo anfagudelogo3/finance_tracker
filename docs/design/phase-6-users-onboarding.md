@@ -72,9 +72,9 @@ fast paths.
 |---|---|
 | `omitir` | Skips **the current question only**. Nothing is stored for it, so the default applies: personal, COP, default categories. Skipping the profile question also skips the business details. |
 | `omitir todo` | Skips every remaining question with its default. |
-| Off-topic or finance message mid-onboarding | Short answer, then the current question again with a reminder: *"Para empezar necesito terminar tu configuración (o escribe omitir)."* Not recorded. |
-| Abandoned (user stops answering, comes back later) | Onboarding starts **over from the beginning**. |
-| `reiniciar configuración` (must be the whole message) | Reruns onboarding **without the profile question**: the profile is fixed from the first onboarding. Saves a **complete new snapshot** in `user_prefs` (`source="onboarding_restart"`), rather than merging into the last one, so restarts can be counted. |
+| Off-topic or finance message mid-onboarding | The reminder *"Para empezar necesito terminar tu configuración (o escribe omitir)."* followed by the current question again. No LLM call for this; nothing is recorded. |
+| Abandoned (no answer for `ONBOARDING_ABANDON_HOURS` = 24 h) | Onboarding starts **over from the beginning**; the held message is kept. |
+| `reiniciar configuración` (must be the whole message, accents optional) | Reruns onboarding **without the profile questions** (type and business details): the profile is fixed from the first onboarding; business details are edited through the users agent. Saves a **complete new snapshot** in `user_prefs` (`source="onboarding_restart"`), rather than merging into the last one, so restarts can be counted. |
 
 Single changes after onboarding don't need a restart: "agrega la categoría mascotas" goes through
 the router to the users agent and changes only that.
@@ -105,6 +105,35 @@ answer was discussed and left for later: it would cost an extra LLM call.
 >
 > Tomar el control de tus finanzas nunca fue tan fácil. Antes de empezar, te haré unas preguntas
 > rápidas para adaptarme a ti (menos de 2 minutos). 🚀
+
+### 2.7 As built (6b)
+
+- `agents/onboarding.py::handle(user_id, prefs, text, message_type, message_id, now)` returns an
+  `OnboardingOutcome(replies, prefs, handled, replay)`. `handler.py` calls it after
+  transcribing voice notes and before any routing. `handled=False` means "route normally".
+- **State:** `user_prefs.onboarding` = `{status, step, restart, draft, held, started_at,
+  updated_at}`. Every answered step appends a `user_prefs` row (`source="onboarding"`); answers
+  collect in `draft` and only become `profile` / `default_currency` / categories at the end.
+  The final row is a **complete snapshot** (`append_user_prefs(..., replace=True)`).
+- **What's held:** the first message only if it could be a record: it contains a digit (an
+  amount), or it's a photo. A greeting isn't held. A held photo can't be replayed (its bytes
+  aren't kept), so the user is asked to send it again.
+- **Replay:** after "sí", `handler._route` processes the held text with its original
+  `message_id` and Bogota timestamp; the expense and income agents now take the record date
+  from `request.now` (Bogota) rather than "today", so the record keeps the original date.
+- **Categories:** applied by `database.set_user_categories` in one transaction: renames keep
+  the row, missing names are added or reactivated, others are deactivated; each change is a
+  `category_events` row. New users are still seeded with the personal defaults at creation,
+  so a business onboarding shows up in `category_events` as seed adds followed by deactivations.
+- **Main currency** is passed to the expense and income agents (`AgentRequest.default_currency`)
+  as the currency to assume when a message doesn't name one.
+- **Closed matching:** digits, spoken numbers ("uno", "la dos"), option names, yes/no words,
+  currency names (pesos, dólares, euros…), all accent- and punctuation-insensitive.
+- **Claude calls** (`CLAUDE_EXTRACTION_MODEL`, forced tool): business details, an unknown
+  currency, category customization. Each returns `is_answer: false` for unrelated text, which
+  produces the reminder.
+- **Timezone:** every timestamp is `America/Bogota` (`config.TIMEZONE`), including the
+  database session (`get_connection` sets `timezone`), so SQL defaults agree with the code.
 
 ## 3. Users agent capabilities
 

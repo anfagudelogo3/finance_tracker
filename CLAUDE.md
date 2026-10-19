@@ -40,7 +40,7 @@ uv run black --check src/ tests/ evals/  # verify formatting, no writes (CI-frie
 
 ## Architecture
 
-Single Lambda, one entry point, straight-line pipeline. `lambda/handler.py` (copied to the zip root, so the Lambda handler setting stays `handler.handler`) re-exports `finance_tracker.handler.handler`. `src/finance_tracker/handler.py::_handle_message` runs the whole request in order: parse form body → `webhook.verify_signature` (401 on failure) → `webhook.extract_message` → allowlist check on `ALLOWED_PHONE_NUMBERS` → `get_or_create_user` → `database.save_message` → `load_recent_turns` / `save_turn` → `media.store_all_media` (S3) → intent routing → reply.
+Single Lambda, one entry point, straight-line pipeline. `lambda/handler.py` (copied to the zip root, so the Lambda handler setting stays `handler.handler`) re-exports `finance_tracker.handler.handler`. `src/finance_tracker/handler.py::_handle_message` runs the whole request in order: parse form body → `webhook.verify_signature` (401 on failure) → `webhook.extract_message` → allowlist check on `ALLOWED_PHONE_NUMBERS` → `get_or_create_user` → `database.save_message` → `load_recent_turns` / `get_user_prefs` / `save_turn` → `media.store_all_media` (S3) → Whisper transcription (voice notes) → **onboarding** (`agents/onboarding.handle`; blocks everything until done or skipped, then may replay the held first message) → intent routing (`handler._route`) → reply.
 
 **Intent routing** — first match wins:
 1. `fast_paths.is_excel_request` — keyword match → build `.xlsx`, upload to S3, send presigned link
@@ -56,7 +56,7 @@ Because Excel is checked first, "exportame el resumen" is an Excel request, not 
 
 **Idempotency:** `save_message` uses `ON CONFLICT (whatsapp_message_id) DO NOTHING` and returns `None` on a duplicate; the handler short-circuits with `200`. Twilio retries are therefore safe.
 
-**Dates:** `America/Bogota` (`zoneinfo`) everywhere — the agents (and `legacy.openai_parser`) stamp the record date, the handler passes `now` into `parse_report_request`. Do not fall back to naive `datetime.now()`.
+**Dates:** `America/Bogota` (`config.TIMEZONE`, `zoneinfo`) everywhere — the handler stamps `now`, the expense/income agents take the record date from `request.now` (so a message held during onboarding keeps its date), and `database.get_connection` sets the session timezone so SQL defaults agree. Do not fall back to naive `datetime.now()`.
 
 ### Package layout (`src/finance_tracker/`)
 
@@ -66,7 +66,7 @@ Because Excel is checked first, "exportame el resumen" is an Excel request, not 
 | `config.py` | All env vars and tunable constants (models, cutoffs, reply strings) |
 | `core/` | Shared contracts and helpers: `agent_types.py` (`AgentRequest`/`AgentResponse`), `agent_loop.py` (tool-use loop), `claude_client.py`, `confidence.py`, `text.py` |
 | `routing/` | `fast_paths.py` (all keyword checks + `fast_route`), `orchestrator.py` (fast path, else router), `router_agent.py` (Claude router, agents as tools) |
-| `agents/` | Specialists, each `handle(AgentRequest) -> AgentResponse`: `expenses.py`, `incomes.py`, `reporting.py` (+ `report_format.py`) |
+| `agents/` | Specialists, each `handle(AgentRequest) -> AgentResponse`: `expenses.py`, `incomes.py`, `reporting.py` (+ `report_format.py`); plus `onboarding.py`, the first-time setup state machine (Phase 6b) |
 | `channels/whatsapp/` | `webhook.py` (Twilio HMAC verification, payload → message dict), `sender.py` (outbound messages/documents, confirmation formatting) |
 | `storage/` | `database.py` (psycopg2), `media.py` (Twilio media → S3 `incoming/whatsapp/{prefix}/{phone}/{sid}.{ext}`), `excel.py` (`.xlsx` + presigned URLs) |
 | `legacy/` | `openai_parser.py`: OpenAI paths not yet migrated (image vision, Excel date parsing, original text parser) plus Whisper transcription (permanent) |
@@ -105,6 +105,8 @@ Evaluated today: the legacy `parse_expense` / `parse_report_request`, the Claude
 `scripts/setup_db.sql` is idempotent (`CREATE TABLE IF NOT EXISTS` + `ADD COLUMN IF NOT EXISTS` migrations at the bottom). Adding a column means: append an `ALTER TABLE ... IF NOT EXISTS` there, update `database.py`, and update `docs/database.md`.
 
 `users` → `messages` (whatsapp_message_id UNIQUE) → `expenses` / `incomes`; plus `conversation_turns`, `categories`, `budgets`. Full schema in `docs/database.md`.
+
+**Categories by id:** `expenses` / `incomes` store `category_id` (no name); `save_expense` / `save_income` resolve the model's name (fallback `otro`), reads join `categories`. Change categories only through `database.set_user_categories` (or future users-agent functions), which also logs to the append-only `category_events`. Categories are deactivated, never deleted.
 
 **Preferences are append-only:** `user_prefs` gets a new row (full snapshot + changed keys + `created_at`) on every change and is never UPDATEd; every read takes the user's latest row (`database.get_user_prefs`). Write only through `database.append_user_prefs`. `users.prefs` is deprecated and not read.
 

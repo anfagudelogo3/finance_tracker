@@ -177,3 +177,25 @@ class TestBuildSystemPrompt:
     def test_uses_provided_categories(self):
         prompt = _build_system_prompt(["mascota", "viajes"])
         assert "mascota, viajes" in prompt
+
+
+class TestMessageDateAndCurrency:
+    def test_record_date_is_the_messages_bogota_date(self):
+        """A message held during onboarding is saved with its own date, not today's."""
+        from dataclasses import replace
+
+        from finance_tracker.agents import expenses as agent
+
+        request = replace(_request("almuerzo 20000"), now="2026-10-19T23:30:00-05:00")
+        with patch.object(agent, "get_user_categories", return_value=["otro"]), patch.object(
+            agent, "save_expense", return_value=1
+        ), patch.object(agent, "_extract", return_value=[{"amount": 20000, "currency": "COP",
+                "category": "otro", "description": "x", "payment_method": None, "merchant": None}]):
+            response = agent.handle(request)
+
+        assert response.data[0]["date"] == "2026-10-19"
+
+    def test_default_currency_reaches_the_prompt(self):
+        prompt = _build_system_prompt(["otro"], "USD")
+        assert 'assume "USD"' in prompt
+        assert 'assume "COP"' in _build_system_prompt(["otro"])

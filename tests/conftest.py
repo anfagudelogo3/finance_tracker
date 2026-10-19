@@ -39,3 +39,15 @@ def _no_live_llm_calls(monkeypatch):
     monkeypatch.setattr(claude_client.client.messages, "create", _blocked)
     monkeypatch.setattr(openai_parser.client.chat.completions, "create", _blocked)
     monkeypatch.setattr(openai_parser.client.audio.transcriptions, "create", _blocked)
+
+
+@pytest.fixture(autouse=True)
+def _no_live_database(monkeypatch):
+    """Fail loudly if a test opens a real database connection — patch
+    finance_tracker.storage.database.get_connection (or the caller's import) instead."""
+    import psycopg2
+
+    def _blocked(*args, **kwargs):
+        raise AssertionError("Test opened a live database connection — mock it")
+
+    monkeypatch.setattr(psycopg2, "connect", _blocked)

@@ -55,19 +55,27 @@ Keys in `prefs` (see [agent-roadmap.md](agent-roadmap.md) §5.1):
 
 ```jsonc
 {
-  "profile": {"type": "personal"},                    // or {"type": "business", "business": {"name", "industry", "description"}}
-  "default_currency": "COP",                          // Phase 6
-  "report": {"default_period": "month", "group_by": "category"},  // Phase 6
-  "onboarding": {"step": "done", "completed_at": "..."}            // Phase 6
+  "profile": {"type": "personal"},     // or {"type": "business", "business": {"name", "industry", "sells", "main_costs"}}
+  "default_currency": "COP",           // assumed when a message names no currency
+  "onboarding": {                      // agents/onboarding.py
+    "status": "done",                  // in_progress | done | skipped
+    "completed_at": "2026-10-20T09:00:00-05:00",
+    "step": "confirm_held",            // only while the held first message awaits "sí"/"no"
+    "held": {"text": "...", "message_type": "text", "message_id": 41, "now": "..."}
+  }
 }
 ```
 
-Setting a profile by hand until the Phase 6 users agent exists:
+While onboarding is in progress, `onboarding` also holds `step`, `draft` (answers so far),
+`restart` and `updated_at`. A finished onboarding writes a complete snapshot (not merged).
+
+Setting a profile by hand (normally onboarding does it):
 
 ```sql
 -- First preferences row for user 7: snapshot and changes are the same object
 WITH p AS (SELECT '{"profile": {"type": "business", "business": {"industry": "restaurante",
-  "description": "Vende almuerzos. Compra insumos, paga nómina y arriendo."}}}'::jsonb AS v)
+  "sells": "almuerzos", "main_costs": "insumos, nómina y arriendo"}},
+  "onboarding": {"status": "done"}}'::jsonb AS v)
 INSERT INTO user_prefs (user_id, prefs, changes, source)
 SELECT 7, v, v, 'manual' FROM p;
 ```
@@ -144,7 +152,7 @@ category called before?". Seeding a new user writes one `add` event per default 
 | `action` | `VARCHAR(20) NOT NULL` | `add`, `rename`, `merge`, `deactivate`, `reactivate` |
 | `old_name` / `new_name` | `VARCHAR(50)` | Before / after the change |
 | `records_affected` | `INTEGER` | Records re-pointed by a merge |
-| `source` | `VARCHAR(20) NOT NULL` | `seed`, `onboarding`, `users_agent` |
+| `source` | `VARCHAR(20) NOT NULL` | `seed`, `onboarding`, `onboarding_restart`, `users_agent` |
 | `created_at` | `TIMESTAMPTZ` | |
 
 ## `expenses`

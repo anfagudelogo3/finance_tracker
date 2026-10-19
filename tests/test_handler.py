@@ -9,8 +9,10 @@ from finance_tracker.config import MSG_ERROR
 
 @pytest.fixture(autouse=True)
 def _no_user_prefs():
-    """Every handler test runs as a personal-profile user unless it overrides this."""
-    with patch("finance_tracker.handler.get_user_prefs", return_value={}) as mock:
+    """Every handler test runs as an onboarded personal-profile user unless it
+    overrides this."""
+    prefs = {"onboarding": {"status": "done"}}
+    with patch("finance_tracker.handler.get_user_prefs", return_value=prefs) as mock:
         yield mock
 
 
@@ -336,7 +338,7 @@ class TestProfileWiring:
             "type": "business",
             "business": {"industry": "restaurante", "description": "Vende almuerzos"},
         }
-        _no_user_prefs.return_value = {"profile": business}
+        _no_user_prefs.return_value = {"profile": business, "onboarding": {"status": "done"}}
         mock_orchestrator.handle_message.return_value = MagicMock(reply_text="ok")
 
         # A report-looking message from a business user must not take the report
@@ -374,3 +376,102 @@ class TestProfileWiring:
 
         agent_request = mock_orchestrator.handle_message.call_args[0][0]
         assert agent_request.profile == {"type": "personal"}
+
+
+_PIPELINE = [
+    "finance_tracker.handler.verify_signature",
+    "finance_tracker.handler.get_or_create_user",
+    "finance_tracker.handler.save_message",
+    "finance_tracker.handler.load_recent_turns",
+    "finance_tracker.handler.save_turn",
+    "finance_tracker.handler.send_message",
+    "finance_tracker.handler.orchestrator",
+    "finance_tracker.handler.onboarding",
+]
+
+
+@pytest.fixture
+def pipeline():
+    """The handler's collaborators, mocked; onboarding is replaced as a whole."""
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        mocks = {path.rsplit(".", 1)[1]: stack.enter_context(patch(path)) for path in _PIPELINE}
+        mocks["verify_signature"].return_value = True
+        mocks["get_or_create_user"].return_value = 7
+        mocks["save_message"].return_value = 55
+        mocks["load_recent_turns"].return_value = []
+        mocks["orchestrator"].handle_message.return_value = MagicMock(reply_text="✅ ok")
+        yield mocks
+
+
+class TestOnboardingWiring:
+    def test_onboarding_replies_block_routing(self, pipeline):
+        from finance_tracker.agents.onboarding import OnboardingOutcome
+
+        pipeline["onboarding"].handle.return_value = OnboardingOutcome(
+            replies=["bienvenida", "pregunta"], prefs={}
+        )
+
+        _handle_message(_make_event("almuerzo 20000"))
+
+        sent = [c.args[1] for c in pipeline["send_message"].call_args_list]
+        assert sent == ["bienvenida", "pregunta"]
+        pipeline["orchestrator"].handle_message.assert_not_called()
+
+    def test_held_message_is_replayed_with_its_own_id_and_timestamp(self, pipeline):
+        from finance_tracker.agents.onboarding import OnboardingOutcome
+
+        held = {"text": "almuerzo 20000", "message_type": "text", "message_id": 41,
+                "now": "2026-10-19T22:00:00-05:00"}
+        prefs = {"profile": {"type": "personal"}, "default_currency": "USD",
+                 "onboarding": {"status": "done"}}
+        pipeline["onboarding"].handle.return_value = OnboardingOutcome(
+            replies=[], prefs=prefs, replay=held
+        )
+
+        _handle_message(_make_event("sí"))
+
+        request = pipeline["orchestrator"].handle_message.call_args.args[0]
+        assert request.text == "almuerzo 20000"
+        assert request.message_id == 41
+        assert request.now == "2026-10-19T22:00:00-05:00"
+        assert request.default_currency == "USD"
+
+    def test_not_handled_routes_normally_with_bogota_time(self, pipeline):
+        from finance_tracker.agents.onboarding import OnboardingOutcome
+
+        pipeline["onboarding"].handle.return_value = OnboardingOutcome(
+            replies=[], prefs={"onboarding": {"status": "done"}}, handled=False
+        )
+
+        _handle_message(_make_event("nequi 50000"))
+
+        request = pipeline["orchestrator"].handle_message.call_args.args[0]
+        assert request.message_id == 55
+        assert request.now.endswith("-05:00")  # America/Bogota
+
+    @patch("finance_tracker.handler.update_message_transcript")
+    @patch("finance_tracker.handler.transcribe_audio", return_value="me pagaron 2 millones")
+    @patch("finance_tracker.handler.store_all_media")
+    def test_voice_note_reaches_onboarding_as_its_transcript(
+        self, mock_store, mock_transcribe, mock_update, pipeline
+    ):
+        from finance_tracker.agents.onboarding import OnboardingOutcome
+
+        mock_store.return_value = [
+            {"bytes": b"x", "ext": "ogg", "content_type": "audio/ogg", "s3_prefix": "audio"}
+        ]
+        pipeline["onboarding"].handle.return_value = OnboardingOutcome(replies=["ok"], prefs={})
+        event = _make_event("")
+        event["body"] += "&NumMedia=1&MediaUrl0=https%3A%2F%2Fx&MediaContentType0=audio%2Fogg"
+
+        with patch("finance_tracker.handler.extract_message") as mock_extract:
+            mock_extract.return_value = {
+                "phone": "+573001234567", "message_id": "SM9", "text": "",
+                "media": [{"s3_prefix": "audio"}],
+            }
+            _handle_message(event)
+
+        args = pipeline["onboarding"].handle.call_args.args
+        assert args[2] == "me pagaron 2 millones" and args[3] == "audio"

@@ -130,9 +130,19 @@ def _profile_summary(profile: dict) -> str:
     if profile.get("type") == "business":
         business = profile.get("business") or {}
         name = f" ({business['name']})" if business.get("name") else ""
+        # Onboarding stores what it sells / its main costs; older profiles a description
+        details = " ".join(
+            part
+            for part in (
+                f"Sells: {business['sells']}." if business.get("sells") else "",
+                f"Main costs: {business['main_costs']}." if business.get("main_costs") else "",
+                business.get("description") or "",
+            )
+            if part
+        )
         return (
-            f"Profile: business — {business.get('industry', 'negocio')}{name}. "
-            f"{business.get('description', '')}\n"
+            f"Profile: business — {business.get('industry') or 'negocio'}{name}. "
+            f"{details}\n"
             "Sales of what this business sells are incomes; what it buys or pays to operate "
             "(supplies, payroll, rent, services) are expenses. If a message could be either "
             "a sale or the owner's own spending, ask."

@@ -10,6 +10,7 @@ from finance_tracker.config import (
     DEFAULT_INCOME_CATEGORIES,
     CONVERSATION_MAX_TURNS,
     CONVERSATION_WINDOW_MINUTES,
+    TIMEZONE,
 )
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,10 @@ logger = logging.getLogger(__name__)
 
 @contextmanager
 def get_connection():
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    # Session timezone = the app's, so CURRENT_DATE / NOW() agree with the code's dates
+    conn = psycopg2.connect(
+        DATABASE_URL, cursor_factory=RealDictCursor, options=f"-c timezone={TIMEZONE}"
+    )
     try:
         yield conn
     finally:
@@ -134,6 +138,87 @@ def get_user_categories(user_id: int, kind: str = "expense") -> list[str]:
     return DEFAULT_INCOME_CATEGORIES if kind == "income" else DEFAULT_EXPENSE_CATEGORIES
 
 
+def set_user_categories(
+    user_id: int,
+    kind: str,
+    names: list[str],
+    source: str,
+    renames: list[tuple[str, str]] | None = None,
+) -> list[str]:
+    """Make `names` the user's active categories of `kind`, in one transaction.
+
+    Renames run first and keep the category row (records follow it by id). Then names
+    that exist are reactivated, new ones are added, and active ones not in `names` are
+    deactivated — never deleted, so past records keep their category. Every change is
+    logged in category_events. Names are matched case-insensitively. Returns the active
+    names.
+    """
+    log_event = """
+        INSERT INTO category_events
+            (user_id, category_id, kind, action, old_name, new_name, source)
+        VALUES (%(user_id)s, %(category_id)s, %(kind)s, %(action)s,
+                %(old_name)s, %(new_name)s, %(source)s);
+    """
+    base = {"user_id": user_id, "kind": kind, "source": source}
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, active FROM categories
+                WHERE user_id = %(user_id)s AND kind = %(kind)s
+                FOR UPDATE;
+                """,
+                base,
+            )
+            existing = {row["name"].lower(): dict(row) for row in cur.fetchall()}
+
+            for old, new in renames or []:
+                row = existing.get(old.lower())
+                if row is None or new.lower() in existing:
+                    continue  # unknown source, or the target exists (that's a merge)
+                cur.execute(
+                    "UPDATE categories SET name = %(new)s WHERE id = %(id)s;",
+                    {"new": new, "id": row["id"]},
+                )
+                cur.execute(log_event, {**base, "category_id": row["id"], "action": "rename",
+                                        "old_name": row["name"], "new_name": new})
+                existing[new.lower()] = {**existing.pop(old.lower()), "name": new}
+
+            wanted = {name.lower(): name for name in names}
+            for key, name in wanted.items():
+                row = existing.get(key)
+                if row is None:
+                    cur.execute(
+                        """
+                        INSERT INTO categories (user_id, name, kind)
+                        VALUES (%(user_id)s, %(name)s, %(kind)s) RETURNING id;
+                        """,
+                        {**base, "name": name},
+                    )
+                    category_id = cur.fetchone()["id"]
+                    cur.execute(log_event, {**base, "category_id": category_id, "action": "add",
+                                            "old_name": None, "new_name": name})
+                elif not row["active"]:
+                    cur.execute(
+                        "UPDATE categories SET active = TRUE WHERE id = %(id)s;", {"id": row["id"]}
+                    )
+                    cur.execute(log_event, {**base, "category_id": row["id"], "action": "reactivate",
+                                            "old_name": None, "new_name": row["name"]})
+
+            for key, row in existing.items():
+                if row["active"] and key not in wanted:
+                    cur.execute(
+                        "UPDATE categories SET active = FALSE WHERE id = %(id)s;", {"id": row["id"]}
+                    )
+                    cur.execute(log_event, {**base, "category_id": row["id"], "action": "deactivate",
+                                            "old_name": row["name"], "new_name": None})
+            conn.commit()
+    logger.info(
+        "Set %d %s categories for user=%d (source=%s)", len(wanted), kind, user_id, source
+    )
+    return [existing.get(key, {}).get("name", name) for key, name in wanted.items()]
+
+
 # ── Preferences (append-only history) ────────────────────────────────────────────
 #
 # user_prefs is never updated in place: every change inserts a new row holding the full
@@ -158,13 +243,14 @@ def get_user_prefs(user_id: int) -> dict:
 
 
 def append_user_prefs(
-    user_id: int, changes: dict, source: str = "manual"
+    user_id: int, changes: dict, source: str = "manual", replace: bool = False
 ) -> int:
     """Record a preferences change as a new user_prefs row and return its id.
 
     The new row's snapshot is the latest preferences with `changes` merged on top
     (top-level keys replaced), read and written in one transaction so two concurrent
-    changes can't drop each other's keys.
+    changes can't drop each other's keys. With replace=True the snapshot is exactly
+    `changes` (a completed onboarding writes a complete new configuration).
     """
     latest = """
         SELECT prefs FROM user_prefs
@@ -183,7 +269,8 @@ def append_user_prefs(
             cur.execute("SELECT id FROM users WHERE id = %(user_id)s FOR UPDATE;", {"user_id": user_id})
             cur.execute(latest, {"user_id": user_id})
             row = cur.fetchone()
-            prefs = {**((row["prefs"] if row else None) or {}), **changes}
+            previous = {} if replace else ((row["prefs"] if row else None) or {})
+            prefs = {**previous, **changes}
             cur.execute(
                 insert,
                 {

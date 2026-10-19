@@ -475,7 +475,8 @@ Delivered as three PRs:
   `categories` for the name. New append-only `category_events` table. Business default
   categories in `config.py`. Current tests and evals stay green.
 - **6b — Onboarding.** `agents/onboarding.py` state machine (§5.3); held first message;
-  `omitir` / `omitir todo` / `reiniciar configuración`; profile-based category seeding. Deterministic unit tests for every step.
+  `omitir` / `omitir todo` / `reiniciar configuración`; profile-based category seeding.
+  **Built** — details in the design doc §2.7. Deterministic unit tests for every step.
 - **6c — Users agent.** `agents/users.py` (§5.2) on `run_tool_loop`; `delegate_to_users` in the
   router; settings functions in `database.py` scoped by `user_id`; confirmation flow; help.
   Enables the `skip:"phase-6"` cases in `route_message.json` and adds a users-agent dataset

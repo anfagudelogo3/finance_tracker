@@ -3,6 +3,19 @@
 Everything happens inside a normal WhatsApp chat with the bot. There are three things you
 can do: **log an expense**, **ask for a report**, and **export to Excel**.
 
+## First message: setup
+
+The first time you write, the assistant introduces itself and asks a few quick questions before
+recording anything: personal or business use (and, for a business, what it is, sells and spends
+on), your main currency, and your expense and income categories (keep the defaults or customize
+them, e.g. *"quita ropa y agrega mascotas"*). Answer with the option number, in your own words,
+or with a voice note.
+
+- `omitir` skips the current question (the default is used); `omitir todo` skips the rest.
+- If your first message was an expense (e.g. *"almuerzo 20000"*), you'll be asked at the end
+  whether to record it; it keeps its original date.
+- `reiniciar configuración` runs the setup again (your personal/business choice stays).
+
 ## Logging an expense
 
 Send a short, natural message describing what you spent. The amount can be written many
