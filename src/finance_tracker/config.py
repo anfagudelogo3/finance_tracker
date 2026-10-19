@@ -1,5 +1,11 @@
 import os
 
+from finance_tracker.core.ssm_config import load_ssm_parameters
+
+# In the Lambda, secrets and settings come from SSM Parameter Store (CONFIG_SSM_PATH);
+# loaded once per cold start, before anything below reads os.environ. No-op locally.
+load_ssm_parameters()
+
 # Twilio
 TWILIO_ACCOUNT_SID = os.environ["TWILIO_ACCOUNT_SID"]
 TWILIO_AUTH_TOKEN = os.environ["TWILIO_AUTH_TOKEN"]
