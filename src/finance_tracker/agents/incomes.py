@@ -4,17 +4,23 @@ from zoneinfo import ZoneInfo
 
 from finance_tracker.core.agent_types import AgentRequest, AgentResponse
 from finance_tracker.core.claude_client import client
-from finance_tracker.config import CLAUDE_EXTRACTION_MODEL, DEFAULT_INCOME_CATEGORIES, MSG_EMPTY_INCOME
+from finance_tracker.config import (
+    CLAUDE_EXTRACTION_MODEL,
+    DEFAULT_CURRENCY,
+    DEFAULT_INCOME_CATEGORIES,
+    MSG_EMPTY_INCOME,
+    TIMEZONE,
+)
 from finance_tracker.storage.database import get_user_categories, save_income
 from finance_tracker.core.confidence import estimate_confidence
 from finance_tracker.channels.whatsapp.sender import format_income_confirmation
 
 logger = logging.getLogger(__name__)
 
-_BOGOTA = ZoneInfo("America/Bogota")
+_BOGOTA = ZoneInfo(TIMEZONE)
 
 
-def _build_system_prompt(categories: list[str]) -> str:
+def _build_system_prompt(categories: list[str], currency: str = DEFAULT_CURRENCY) -> str:
     """Field-extraction rules for income — no payment_method/merchant, since the
     incomes table has no such columns (unlike expenses)."""
     cats = ", ".join(categories)
@@ -24,22 +30,22 @@ Given a user message, call the record_incomes tool with one entry per income men
 
 Rules:
 - amount: the numeric value. No currency symbols.
-- currency: the currency of the amount (e.g., "COP", "USD"). If the currency is not explicitly mentioned, assume "COP".
+- currency: the currency of the amount (e.g., "COP", "USD"). If the currency is not explicitly mentioned, assume "{currency}".
 - category: infer from context. Use one of: {cats}.
 - description: a short summary of what the income was.
 
 Examples:
 Query: "me pagaron 2000000 de salario"
-→ one income: amount=2000000, currency=COP, category=salario, description="pago de salario"
+→ one income: amount=2000000, currency={currency}, category=salario, description="pago de salario"
 
 Query: "cobre 500000 de un cliente"
-→ one income: amount=500000, currency=COP, category=freelance, description="pago de cliente"
+→ one income: amount=500000, currency={currency}, category=freelance, description="pago de cliente"
 
 Query: "me pagaron 500 dolares de un cliente"
 → one income: amount=500, currency=USD, category=freelance, description="pago de cliente"
 
 Query: "me depositaron mi salario de 3000000 y tambien 200000 de un regalo"
-→ two incomes: (amount=3000000, currency=COP, category=salario, description="salario") and (amount=200000, currency=COP, category=regalo, description="regalo")
+→ two incomes: (amount=3000000, currency={currency}, category=salario, description="salario") and (amount=200000, currency={currency}, category=regalo, description="regalo")
 
 Query: "gracias"
 → no income: call record_incomes with an empty incomes array
@@ -86,14 +92,16 @@ def _build_income_tool(categories: list[str]) -> dict:
     }
 
 
-def _extract(text: str, categories: list[str]) -> list[dict]:
+def _extract(
+    text: str, categories: list[str], currency: str = DEFAULT_CURRENCY
+) -> list[dict]:
     """Forced tool-use call, same pattern as agents.expenses._extract."""
     cats = categories or DEFAULT_INCOME_CATEGORIES
     logger.info("Calling Claude to parse income: %s", text)
     response = client.messages.create(
         model=CLAUDE_EXTRACTION_MODEL,
         max_tokens=1024,
-        system=_build_system_prompt(cats),
+        system=_build_system_prompt(cats, currency),
         messages=[{"role": "user", "content": text}],
         tools=[_build_income_tool(cats)],
         tool_choice={"type": "tool", "name": "record_incomes"},
@@ -108,12 +116,13 @@ def handle(request: AgentRequest) -> AgentResponse:
     audio-transcript message. Image/receipt income (e.g. deposit slips) isn't
     classified yet — all image messages still route to the expense image path."""
     categories = get_user_categories(request.user_id, kind="income")
-    incomes = _extract(request.text, categories)
+    incomes = _extract(request.text, categories, request.default_currency)
     if not incomes:
         logger.info("No incomes parsed from message id=%d", request.message_id)
         return AgentResponse(ok=True, reply_text=MSG_EMPTY_INCOME, data=None)
 
-    today = datetime.now(_BOGOTA).date().isoformat()
+    # The message's own Bogota date: a message held during onboarding keeps its date
+    today = datetime.fromisoformat(request.now).astimezone(_BOGOTA).date().isoformat()
     for income in incomes:
         income["date"] = today
         income["confidence"] = estimate_confidence(income)

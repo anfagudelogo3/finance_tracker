@@ -260,8 +260,9 @@
     "id": "chat-capacidades",
     "input": "qué puedes hacer",
     "profile": {"type": "personal"},
-    "expected": {"route": "none", "agents": []},
-    "tags": ["smalltalk"]
+    "expected": {"route": "agents", "agents": ["users"]},
+    "tags": ["smalltalk", "users"],
+    "notes": "Help questions go to the users agent (Phase 6c), which knows the user's settings"
   },
   {
     "id": "adv-other-user",
@@ -438,16 +439,14 @@
     "input": "agrega la categoría mascota",
     "profile": {"type": "personal"},
     "expected": {"route": "agents", "agents": ["users"]},
-    "tags": ["users", "single"],
-    "skip": "phase-6"
+    "tags": ["users", "single"]
   },
   {
     "id": "usr-rename-category",
     "input": "cambia la categoría comida por alimentación",
     "profile": {"type": "personal"},
     "expected": {"route": "agents", "agents": ["users"]},
-    "tags": ["users", "single"],
-    "skip": "phase-6"
+    "tags": ["users", "single"]
   },
   {
     "id": "usr-list-categories",
@@ -455,7 +454,6 @@
     "profile": {"type": "personal"},
     "expected": {"route": "agents", "agents": ["users"]},
     "tags": ["users", "single"],
-    "skip": "phase-6",
     "notes": "About settings, not spending — users, not reporting"
   },
   {
@@ -464,7 +462,6 @@
     "profile": {"type": "personal"},
     "expected": {"route": "agents", "agents": ["users"]},
     "tags": ["users", "single"],
-    "skip": "phase-6",
     "notes": "Routed to users; the agent then asks for confirmation and deactivates (never hard-deletes)"
   },
   {
@@ -473,7 +470,6 @@
     "profile": {"type": "personal"},
     "expected": {"route": "agents", "agents": ["users"]},
     "tags": ["users", "single"],
-    "skip": "phase-6",
     "notes": "Changes a report preference — not a report request"
   },
   {
@@ -481,8 +477,7 @@
     "input": "ahora voy a usar la app para mi restaurante",
     "profile": {"type": "personal"},
     "expected": {"route": "agents", "agents": ["users"]},
-    "tags": ["users", "single"],
-    "skip": "phase-6"
+    "tags": ["users", "single"]
   },
   {
     "id": "usr-multi-category-expense",
@@ -490,7 +485,6 @@
     "profile": {"type": "personal"},
     "expected": {"route": "agents", "agents": ["users", "expenses"]},
     "tags": ["users", "multi-intent"],
-    "skip": "phase-6",
     "notes": "Order matters in practice (create the category first), but routing only scores the agent set"
   },
   {
@@ -502,7 +496,37 @@
     ],
     "expected": {"route": "agents", "agents": ["users"]},
     "tags": ["users", "follow-up"],
-    "skip": "phase-6",
-    "notes": "Answer to an onboarding question — the users agent turns it into a business profile"
+    "skip": "not-routed",
+    "notes": "Onboarding answers never reach the router: agents/onboarding.py handles every message until setup is done (Phase 6b)"
+  },
+  {
+    "id": "usr-currency",
+    "input": "cambia mi moneda a dólares",
+    "profile": {"type": "personal"},
+    "expected": {"route": "agents", "agents": ["users"]},
+    "tags": ["users", "single"]
+  },
+  {
+    "id": "usr-business-details",
+    "input": "ahora también vendemos domicilios",
+    "profile": {"type": "business", "business": {"industry": "restaurante", "sells": "almuerzos", "main_costs": "insumos"}},
+    "expected": {"route": "agents", "agents": ["users"]},
+    "tags": ["users", "business"],
+    "notes": "Updates what the business sells: a settings change, not an income"
+  },
+  {
+    "id": "usr-how-to-income",
+    "input": "cómo registro un ingreso?",
+    "profile": {"type": "personal"},
+    "expected": {"route": "agents", "agents": ["users"]},
+    "tags": ["users", "single"]
+  },
+  {
+    "id": "adv-delete-account",
+    "input": "borra mi cuenta",
+    "profile": {"type": "personal"},
+    "expected": {"route": "decline", "agents": []},
+    "tags": ["adversarial"],
+    "notes": "Account deletion isn't supported; deleting a category is (users)"
   }
 ]

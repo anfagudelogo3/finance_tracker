@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from finance_tracker.config import DEFAULT_PROFILE
+from finance_tracker.config import DEFAULT_CURRENCY, DEFAULT_PROFILE
 
 
 @dataclass
@@ -10,7 +10,7 @@ class AgentRequest:
     Reuses existing dict shapes rather than inventing parallel types: `media`
     matches media.store_all_media()'s output, `conversation` matches
     database.load_recent_turns()'s {role, content} rows, and `profile` is
-    users.prefs["profile"] ({"type": "personal"} or {"type": "business",
+    user_prefs["profile"] ({"type": "personal"} or {"type": "business",
     "business": {...}} — see docs/agent-roadmap.md §5.1).
 
     No `categories` field: which category `kind` (expense/income/...) applies depends
@@ -28,6 +28,7 @@ class AgentRequest:
     now: str  # ISO datetime, America/Bogota
     conversation: list[dict]
     profile: dict = field(default_factory=lambda: dict(DEFAULT_PROFILE))
+    default_currency: str = DEFAULT_CURRENCY  # user_prefs → default_currency
 
 
 @dataclass

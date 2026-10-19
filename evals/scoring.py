@@ -144,3 +144,44 @@ def score_routing(actual: dict, expected: dict) -> dict:
             "correct": agents_correct,
         },
     }
+
+
+def score_users(actual: dict, expected: dict) -> dict:
+    """Score one users-agent decision against a users_agent.json entry.
+
+    Args:
+        actual:   {"action": tool name of the change made or proposed, or "none",
+                   "args": {...}, "confirmation": bool}
+        expected: Same shape. `args` only lists the arguments that matter; a string
+                  argument matches when the expected text is contained in the actual one
+                  (accent- and case-insensitive), so "domicilios" matches "almuerzos y
+                  domicilios". `confirmation` is only checked when present.
+
+    Returns:
+        {"all_correct": bool, "action": {...}, "args": {...}, "confirmation": {...}},
+        each with expected / actual / correct.
+    """
+    exp_action = expected.get("action")
+    act_action = actual.get("action")
+    action_correct = act_action == exp_action
+
+    exp_args = expected.get("args") or {}
+    act_args = actual.get("args") or {}
+    args_correct = action_correct and all(
+        (_normalize(value) or "") in (_normalize(act_args.get(key)) or "\0")
+        for key, value in exp_args.items()
+    )
+
+    result = {
+        "action": {"expected": exp_action, "actual": act_action, "correct": action_correct},
+        "args": {"expected": exp_args, "actual": act_args, "correct": args_correct},
+    }
+    if "confirmation" in expected:
+        confirmation_correct = bool(actual.get("confirmation")) == expected["confirmation"]
+        result["confirmation"] = {
+            "expected": expected["confirmation"],
+            "actual": bool(actual.get("confirmation")),
+            "correct": confirmation_correct,
+        }
+    result["all_correct"] = all(field["correct"] for field in result.values())
+    return result

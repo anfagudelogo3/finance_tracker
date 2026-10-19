@@ -5,6 +5,7 @@
 
 -- ── RESET (run once to wipe everything) ─────────────────────────────────────────
 -- DROP TABLE IF EXISTS user_prefs CASCADE;
+-- DROP TABLE IF EXISTS category_events CASCADE;
 -- DROP TABLE IF EXISTS budgets CASCADE;
 -- DROP TABLE IF EXISTS incomes CASCADE;
 -- DROP TABLE IF EXISTS expenses CASCADE;
@@ -31,7 +32,7 @@ CREATE TABLE IF NOT EXISTS user_prefs (
     user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     prefs       JSONB NOT NULL,                           -- full snapshot after the change
     changes     JSONB,                                    -- the changed keys only
-    source      VARCHAR(20) NOT NULL DEFAULT 'manual',    -- onboarding | users_agent | manual | migration
+    source      VARCHAR(20) NOT NULL DEFAULT 'manual',    -- onboarding | onboarding_restart | users_agent | manual
     created_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -66,6 +67,22 @@ CREATE TABLE IF NOT EXISTS categories (
     UNIQUE (user_id, name, kind)
 );
 
+-- ── category_events (append-only category history) ──────────────────────────────
+-- One row per category change (add, rename, merge, deactivate, reactivate); never updated.
+-- `categories` stays the source of truth the agents read; this is the audit trail.
+CREATE TABLE IF NOT EXISTS category_events (
+    id                  SERIAL PRIMARY KEY,
+    user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    category_id         INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    kind                VARCHAR(16) NOT NULL,                 -- 'expense' | 'income'
+    action              VARCHAR(20) NOT NULL,                 -- add | rename | merge | deactivate | reactivate
+    old_name            VARCHAR(50),
+    new_name            VARCHAR(50),
+    records_affected    INTEGER,                              -- rows re-pointed by a merge
+    source              VARCHAR(20) NOT NULL,                 -- seed | onboarding | users_agent
+    created_at          TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- ── expenses ──────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS expenses (
     id              SERIAL PRIMARY KEY,
@@ -73,7 +90,7 @@ CREATE TABLE IF NOT EXISTS expenses (
     message_id      INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
     amount          NUMERIC(12, 2) NOT NULL,
     currency        VARCHAR(10) NOT NULL DEFAULT 'COP',
-    category        VARCHAR(50) NOT NULL,
+    category_id     INTEGER NOT NULL REFERENCES categories(id),
     expense_date    DATE NOT NULL DEFAULT CURRENT_DATE,
     payment_method  VARCHAR(50),
     merchant        VARCHAR(100),
@@ -91,7 +108,7 @@ CREATE TABLE IF NOT EXISTS incomes (
     message_id      INTEGER REFERENCES messages(id) ON DELETE SET NULL,
     amount          NUMERIC(12, 2) NOT NULL,
     currency        VARCHAR(10) NOT NULL DEFAULT 'COP',
-    category        VARCHAR(50) NOT NULL,
+    category_id     INTEGER NOT NULL REFERENCES categories(id),
     income_date     DATE NOT NULL DEFAULT CURRENT_DATE,
     source          VARCHAR(20) NOT NULL DEFAULT 'manual',   -- manual | gmail | bank
     description     TEXT,
@@ -118,9 +135,13 @@ CREATE INDEX IF NOT EXISTS idx_messages_user        ON messages (user_id);
 CREATE INDEX IF NOT EXISTS idx_user_prefs_latest    ON user_prefs (user_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_turns_user_created   ON conversation_turns (user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_categories_user      ON categories (user_id, kind);
+CREATE INDEX IF NOT EXISTS idx_category_events_user ON category_events (user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_expenses_user        ON expenses (user_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_message_id  ON expenses (message_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_date        ON expenses (expense_date);
 CREATE INDEX IF NOT EXISTS idx_incomes_user         ON incomes (user_id);
 CREATE INDEX IF NOT EXISTS idx_incomes_date         ON incomes (income_date);
+CREATE INDEX IF NOT EXISTS idx_expenses_category    ON expenses (category_id);
+CREATE INDEX IF NOT EXISTS idx_incomes_category     ON incomes (category_id);
 CREATE INDEX IF NOT EXISTS idx_budgets_user         ON budgets (user_id);
+

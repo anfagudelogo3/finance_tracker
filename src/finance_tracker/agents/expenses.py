@@ -6,6 +6,8 @@ from finance_tracker.core.agent_types import AgentRequest, AgentResponse
 from finance_tracker.core.claude_client import client
 from finance_tracker.config import (
     CLAUDE_EXTRACTION_MODEL,
+    DEFAULT_CURRENCY,
+    TIMEZONE,
     DEFAULT_EXPENSE_CATEGORIES,
     MSG_EMPTY_EXPENSE,
 )
@@ -15,10 +17,10 @@ from finance_tracker.channels.whatsapp.sender import format_confirmation
 
 logger = logging.getLogger(__name__)
 
-_BOGOTA = ZoneInfo("America/Bogota")
+_BOGOTA = ZoneInfo(TIMEZONE)
 
 
-def _build_system_prompt(categories: list[str]) -> str:
+def _build_system_prompt(categories: list[str], currency: str = DEFAULT_CURRENCY) -> str:
     """Field-extraction rules ported from legacy/openai_parser.py's prompt — same domain logic,
     just no JSON-shape instructions since the record_expenses tool enforces that."""
     cats = ", ".join(categories)
@@ -28,7 +30,7 @@ Given a user message, call the record_expenses tool with one entry per expense m
 
 Rules:
 - amount: the numeric value. No currency symbols.
-- currency: the currency of the amount (e.g., "COP", "USD"). If the currency is not explicitly mentioned, assume "COP".
+- currency: the currency of the amount (e.g., "COP", "USD"). If the currency is not explicitly mentioned, assume "{currency}".
 - category: infer from context. Use one of: {cats}.
 - payment_method: if mentioned (e.g., "tarjeta", "efectivo", "nequi"), include it. Otherwise null.
 - merchant: if a specific place or brand is mentioned, include it. Otherwise null.
@@ -36,16 +38,16 @@ Rules:
 
 Examples:
 Query: "almuerzo 32000"
-→ one expense: amount=32000, currency=COP, category=comida, payment_method=null, merchant=null, description="almuerzo"
+→ one expense: amount=32000, currency={currency}, category=comida, payment_method=null, merchant=null, description="almuerzo"
 
 Query: "uber 14 lukas"
-→ one expense: amount=14000, currency=COP, category=transporte, payment_method=null, merchant="Uber", description="viaje en Uber"
+→ one expense: amount=14000, currency={currency}, category=transporte, payment_method=null, merchant="Uber", description="viaje en Uber"
 
 Query: "mercado 12 mil con tarjeta"
-→ one expense: amount=12000, currency=COP, category=mercado, payment_method="tarjeta", merchant=null, description="compra en el mercado"
+→ one expense: amount=12000, currency={currency}, category=mercado, payment_method="tarjeta", merchant=null, description="compra en el mercado"
 
 Query: "almuerzo 20 luca y cine 40 mil"
-→ two expenses: (amount=20000, currency=COP, category=comida, description="almuerzo") and (amount=40000, currency=COP, category=entretenimiento, description="cine")
+→ two expenses: (amount=20000, currency={currency}, category=comida, description="almuerzo") and (amount=40000, currency={currency}, category=entretenimiento, description="cine")
 
 Query: "gracias"
 → no expense: call record_expenses with an empty expenses array
@@ -107,7 +109,9 @@ def _build_expense_tool(categories: list[str]) -> dict:
     }
 
 
-def _extract(text: str, categories: list[str]) -> list[dict]:
+def _extract(
+    text: str, categories: list[str], currency: str = DEFAULT_CURRENCY
+) -> list[dict]:
     """Call Claude with a forced tool call so the response is schema-validated by the
     API rather than trusted to json.loads (today's legacy/openai_parser.py has no error handling
     around that parse — this closes that gap)."""
@@ -116,7 +120,7 @@ def _extract(text: str, categories: list[str]) -> list[dict]:
     response = client.messages.create(
         model=CLAUDE_EXTRACTION_MODEL,
         max_tokens=1024,
-        system=_build_system_prompt(cats),
+        system=_build_system_prompt(cats, currency),
         messages=[{"role": "user", "content": text}],
         tools=[_build_expense_tool(cats)],
         tool_choice={"type": "tool", "name": "record_expenses"},
@@ -130,12 +134,13 @@ def handle(request: AgentRequest) -> AgentResponse:
     """Identify, extract, classify, and persist expense(s) from a text or
     audio-transcript message. Image expenses stay on the old OpenAI vision path."""
     categories = get_user_categories(request.user_id, kind="expense")
-    expenses = _extract(request.text, categories)
+    expenses = _extract(request.text, categories, request.default_currency)
     if not expenses:
         logger.info("No expenses parsed from message id=%d", request.message_id)
         return AgentResponse(ok=True, reply_text=MSG_EMPTY_EXPENSE, data=None)
 
-    today = datetime.now(_BOGOTA).date().isoformat()
+    # The message's own Bogota date: a message held during onboarding keeps its date
+    today = datetime.fromisoformat(request.now).astimezone(_BOGOTA).date().isoformat()
     for expense in expenses:
         expense["date"] = today
         expense["confidence"] = estimate_confidence(expense)

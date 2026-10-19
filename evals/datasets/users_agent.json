@@ -1,0 +1,135 @@
+[
+  {
+    "id": "add-expense-category",
+    "input": "agrega la categoría mascotas",
+    "profile": {"type": "personal"},
+    "expected": {"action": "add_category", "args": {"kind": "expense", "name": "mascotas"}, "confirmation": false},
+    "tags": ["category", "add"]
+  },
+  {
+    "id": "add-income-category",
+    "input": "crea una categoría de ingresos que se llame arriendos",
+    "profile": {"type": "personal"},
+    "expected": {"action": "add_category", "args": {"kind": "income", "name": "arriendos"}, "confirmation": false},
+    "tags": ["category", "add"]
+  },
+  {
+    "id": "rename-used",
+    "input": "cambia la categoría comida por alimentación",
+    "profile": {"type": "personal"},
+    "expected": {"action": "rename_category", "args": {"kind": "expense", "name": "comida", "new_name": "alimentacion"}, "confirmation": true},
+    "tags": ["category", "rename", "confirmation"],
+    "notes": "comida has 12 records: the rename relabels them, so it asks first"
+  },
+  {
+    "id": "rename-unused",
+    "input": "renombra ropa a vestuario",
+    "profile": {"type": "personal"},
+    "expected": {"action": "rename_category", "args": {"name": "ropa", "new_name": "vestuario"}, "confirmation": false},
+    "tags": ["category", "rename"],
+    "notes": "ropa has no records: applied directly"
+  },
+  {
+    "id": "deactivate-unused",
+    "input": "elimina la categoría ropa",
+    "profile": {"type": "personal"},
+    "expected": {"action": "deactivate_category", "args": {"kind": "expense", "name": "ropa"}, "confirmation": false},
+    "tags": ["category", "deactivate"]
+  },
+  {
+    "id": "deactivate-used",
+    "input": "ya no quiero usar la categoría transporte",
+    "profile": {"type": "personal"},
+    "expected": {"action": "deactivate_category", "args": {"name": "transporte"}, "confirmation": true},
+    "tags": ["category", "deactivate", "confirmation"]
+  },
+  {
+    "id": "deactivate-income",
+    "input": "borra la categoría salario",
+    "profile": {"type": "personal"},
+    "expected": {"action": "deactivate_category", "args": {"kind": "income", "name": "salario"}, "confirmation": true},
+    "tags": ["category", "deactivate", "confirmation"],
+    "notes": "salario only exists as an income category"
+  },
+  {
+    "id": "merge",
+    "input": "junta mercado con comida, que todo quede en comida",
+    "profile": {"type": "personal"},
+    "expected": {"action": "rename_category", "args": {"name": "mercado", "new_name": "comida"}, "confirmation": true},
+    "tags": ["category", "merge", "confirmation"]
+  },
+  {
+    "id": "reactivate",
+    "input": "vuelve a activar la categoría viajes",
+    "profile": {"type": "personal"},
+    "expected": {"action": "add_category", "args": {"kind": "expense", "name": "viajes"}, "confirmation": false},
+    "tags": ["category", "reactivate"],
+    "notes": "viajes exists but is deactivated: add_category reactivates it"
+  },
+  {
+    "id": "protected-otro",
+    "input": "elimina la categoría otro",
+    "profile": {"type": "personal"},
+    "expected": {"action": "none"},
+    "tags": ["category", "guard"],
+    "notes": "otro is the fallback category: nothing changes"
+  },
+  {
+    "id": "currency",
+    "input": "cambia mi moneda principal a dólares",
+    "profile": {"type": "personal"},
+    "expected": {"action": "set_default_currency", "args": {"code": "USD"}, "confirmation": true},
+    "tags": ["currency", "confirmation"]
+  },
+  {
+    "id": "currency-same",
+    "input": "mi moneda es pesos colombianos",
+    "profile": {"type": "personal"},
+    "expected": {"action": "none"},
+    "tags": ["currency"],
+    "notes": "Already COP: nothing to change"
+  },
+  {
+    "id": "list-categories",
+    "input": "qué categorías tengo",
+    "profile": {"type": "personal"},
+    "expected": {"action": "none"},
+    "tags": ["read-only"]
+  },
+  {
+    "id": "help",
+    "input": "qué puedes hacer",
+    "profile": {"type": "personal"},
+    "expected": {"action": "none"},
+    "tags": ["read-only", "help"]
+  },
+  {
+    "id": "profile-type-fixed",
+    "input": "quiero cambiar mi perfil a negocio",
+    "profile": {"type": "personal"},
+    "expected": {"action": "none"},
+    "tags": ["guard"],
+    "notes": "The profile type can't change"
+  },
+  {
+    "id": "budgets-unsupported",
+    "input": "ponme un presupuesto de 500 mil para comida",
+    "profile": {"type": "personal"},
+    "expected": {"action": "none"},
+    "tags": ["guard"]
+  },
+  {
+    "id": "business-details",
+    "input": "ahora también vendemos domicilios",
+    "profile": {"type": "business", "business": {"industry": "restaurante", "sells": "almuerzos", "main_costs": "insumos y nómina"}},
+    "expected": {"action": "update_business_details", "args": {"sells": "domicilios"}},
+    "tags": ["business"]
+  },
+  {
+    "id": "business-add-category",
+    "input": "agrega la categoría empaques para los gastos",
+    "profile": {"type": "business", "business": {"industry": "restaurante", "sells": "almuerzos", "main_costs": "insumos y nómina"}},
+    "expected": {"action": "add_category", "args": {"kind": "expense", "name": "empaques"}, "confirmation": false},
+    "tags": ["business", "category", "add"]
+  }
+]

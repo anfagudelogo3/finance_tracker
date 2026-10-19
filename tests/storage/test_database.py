@@ -5,8 +5,12 @@ import pytest
 from finance_tracker.storage.database import (
     save_message,
     save_expense,
+    save_income,
+    get_expenses,
     get_or_create_user,
     get_user_categories,
+    change_category,
+    get_category_overview,
     save_turn,
     load_recent_turns,
     get_user_prefs,
@@ -62,6 +66,8 @@ class TestSaveExpense:
     @patch("finance_tracker.storage.database.get_connection")
     def test_saves_and_returns_id(self, mock_get_conn):
         mock_cursor = _mock_connection(mock_get_conn, 1)
+        # Category lookup → the user's 'comida' row, then INSERT RETURNING id
+        mock_cursor.fetchone.side_effect = [{"id": 3, "name": "comida"}, {"id": 1}]
 
         expense = {
             "amount": 32000,
@@ -77,7 +83,65 @@ class TestSaveExpense:
 
         assert result == 1
         assert expense["user_id"] == 7  # user_id injected into the row
-        mock_cursor.execute.assert_called_once()
+        assert expense["category_id"] == 3  # stored by id, not by name
+        insert_sql, params = mock_cursor.execute.call_args_list[-1].args
+        assert "category_id" in insert_sql and params["category_id"] == 3
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_unknown_category_falls_back_to_otro(self, mock_get_conn):
+        mock_cursor = _mock_connection(mock_get_conn)
+        mock_cursor.fetchone.side_effect = [{"id": 9, "name": "otro"}, {"id": 1}]
+        expense = {"amount": 5000, "category": "mascotas", "date": "2026-04-03",
+                   "payment_method": None, "merchant": None, "description": "x", "confidence": 0.5}
+
+        save_expense(message_id=1, expense=expense, user_id=7)
+
+        lookup_sql, lookup_params = mock_cursor.execute.call_args_list[0].args
+        assert "'otro'" in lookup_sql and lookup_params["user_id"] == 7
+        assert expense["category_id"] == 9
+        assert expense["category"] == "otro"  # the confirmation shows the stored name
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_missing_otro_is_created_and_logged(self, mock_get_conn):
+        mock_cursor = _mock_connection(mock_get_conn)
+        # lookup → nothing; INSERT category RETURNING; INSERT expense RETURNING
+        mock_cursor.fetchone.side_effect = [None, {"id": 11, "name": "otro"}, {"id": 1}]
+        expense = {"amount": 5000, "category": None, "date": "2026-04-03",
+                   "payment_method": None, "merchant": None, "description": "x", "confidence": 0.5}
+
+        save_expense(message_id=1, expense=expense, user_id=7)
+
+        sqls = [c.args[0] for c in mock_cursor.execute.call_args_list]
+        assert any("INSERT INTO categories" in q for q in sqls)
+        assert any("INSERT INTO category_events" in q for q in sqls)
+        assert expense["category_id"] == 11
+
+
+class TestSaveIncome:
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_resolves_income_category(self, mock_get_conn):
+        mock_cursor = _mock_connection(mock_get_conn)
+        mock_cursor.fetchone.side_effect = [{"id": 21, "name": "salario"}, {"id": 5}]
+        income = {"amount": 2000000, "category": "salario", "date": "2026-04-03",
+                  "description": "pago", "confidence": 1.0}
+
+        assert save_income(message_id=1, income=income, user_id=7) == 5
+        _, lookup_params = mock_cursor.execute.call_args_list[0].args
+        assert lookup_params["kind"] == "income"
+        assert income["category_id"] == 21
+
+
+class TestGetExpenses:
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_reads_current_category_name_through_join(self, mock_get_conn):
+        mock_cursor = _mock_connection(mock_get_conn)
+        mock_cursor.fetchall.return_value = [{"amount": 1, "category": "alimentación"}]
+
+        rows = get_expenses(7, "2026-04-01", "2026-04-30")
+
+        sql = mock_cursor.execute.call_args.args[0]
+        assert "JOIN categories" in sql and "c.name AS category" in sql
+        assert rows == [{"amount": 1, "category": "alimentación"}]
 
 
 class TestGetOrCreateUser:
@@ -88,8 +152,10 @@ class TestGetOrCreateUser:
         result = get_or_create_user("+573001234567")
 
         assert result == 42
-        # New user → categories seeded via executemany
+        # New user → categories seeded via executemany, each logged as an 'add' event
         mock_cursor.executemany.assert_called_once()
+        sqls = [c.args[0] for c in mock_cursor.execute.call_args_list]
+        assert any("INSERT INTO category_events" in q and "'seed'" in q for q in sqls)
 
     @patch("finance_tracker.storage.database.get_connection")
     def test_returns_existing_user_without_seeding(self, mock_get_conn):
@@ -210,3 +276,106 @@ class TestUserPrefs:
         insert_params = mock_cursor.execute.call_args_list[-1][0][1]
         assert insert_params["prefs"].adapted == {"default_currency": "USD"}
         assert insert_params["source"] == "manual"
+
+
+def _categories(mock_cursor, *rows):
+    """The FOR UPDATE category read at the start of change_category."""
+    mock_cursor.fetchall.return_value = [{"id": i, "name": n, "active": a} for i, n, a in rows]
+
+
+def _sqls(mock_cursor):
+    return [c.args[0] for c in mock_cursor.execute.call_args_list]
+
+
+def _events(mock_cursor):
+    return [
+        c.args[1]
+        for c in mock_cursor.execute.call_args_list
+        if "INSERT INTO category_events" in c.args[0]
+    ]
+
+
+class TestChangeCategory:
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_add_new(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn, row_id=30)
+        _categories(cur, (1, "comida", True))
+
+        result = change_category(7, "expense", "add", "  Mascotas ")
+
+        assert result == {"status": "added", "name": "mascotas"}
+        assert _events(cur)[0]["action"] == "add" and _events(cur)[0]["category_id"] == 30
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_add_reactivates_a_deactivated_name(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        _categories(cur, (5, "viajes", False))
+
+        result = change_category(7, "expense", "add", "Viajes")
+
+        assert result["status"] == "reactivated"
+        assert any("active = TRUE" in q for q in _sqls(cur))
+        assert _events(cur)[0]["action"] == "reactivate"
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_rename_keeps_the_row(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        _categories(cur, (1, "comida", True))
+
+        result = change_category(7, "expense", "rename", "comida", "Alimentación")
+
+        assert result == {"status": "renamed", "name": "alimentación"}
+        assert any("UPDATE categories SET name" in q for q in _sqls(cur))
+        assert not any("UPDATE expenses" in q for q in _sqls(cur))  # records follow by id
+        event = _events(cur)[0]
+        assert (event["old_name"], event["new_name"]) == ("comida", "alimentación")
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_rename_onto_existing_merges(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        _categories(cur, (1, "comida", True), (3, "mercado", True))
+        cur.rowcount = 2
+
+        result = change_category(7, "expense", "rename", "mercado", "comida")
+
+        assert result == {"status": "merged", "name": "comida", "records": 4}
+        moves = [c.args[1] for c in cur.execute.call_args_list if "SET category_id" in c.args[0]]
+        assert moves == [{"target": 1, "source": 3, "user_id": 7}] * 2
+        event = _events(cur)[0]
+        assert event["action"] == "merge" and event["records"] == 4
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_deactivate(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        _categories(cur, (2, "ropa", True))
+
+        assert change_category(7, "expense", "deactivate", "ropa")["status"] == "deactivated"
+        assert any("active = FALSE" in q for q in _sqls(cur))
+        assert not any("DELETE" in q for q in _sqls(cur))
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_otro_is_protected(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        _categories(cur, (4, "otro", True))
+
+        assert change_category(7, "expense", "deactivate", "otro")["status"] == "protected"
+        assert _events(cur) == []
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_unknown_category(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        _categories(cur)
+        assert change_category(7, "expense", "rename", "yates", "barcos")["status"] == "not_found"
+
+
+class TestCategoryOverview:
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_counts_live_records_of_both_tables(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        cur.fetchall.return_value = [
+            {"id": 1, "name": "comida", "kind": "expense", "active": True, "records": 3}
+        ]
+
+        assert get_category_overview(7)[0]["records"] == 3
+        sql = cur.execute.call_args.args[0]
+        assert "FROM expenses" in sql and "FROM incomes" in sql and "deleted_at IS NULL" in sql

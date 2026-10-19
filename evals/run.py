@@ -17,6 +17,8 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 # evals/__init__.py bootstraps sys.path and dummy env vars before src imports.
 from finance_tracker.observability.tracing import setup_tracing
@@ -30,9 +32,10 @@ from finance_tracker.routing.fast_paths import (
     is_report_request,
 )
 from finance_tracker.routing import router_agent
+from finance_tracker.agents import users as users_agent
 from finance_tracker.core.agent_types import AgentRequest, AgentResponse
-from finance_tracker.config import DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES
-from evals.scoring import score_expense, score_date_range, score_routing
+from finance_tracker.config import DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES, TIMEZONE
+from evals.scoring import score_expense, score_date_range, score_routing, score_users
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
 
@@ -74,6 +77,11 @@ THRESHOLDS: dict[str, dict[str, float]] = {
         "profile:business": 0.80,
         "adversarial": 0.80,
         "fast_path_precision": 1.0,
+    },
+    # Phase 6c. Provisional until the first live runs (same approach as the router).
+    "users_agent": {
+        "overall": 0.85,
+        "action": 0.90,
     },
     "parse_expense": {
         "overall": 0.85,
@@ -312,7 +320,7 @@ def _run_keyword_routing_baseline() -> tuple[list[dict], dict]:
 # scored, so no DB writes and no extra extraction calls.
 _STUB_HANDLERS = {
     agent: (lambda request: AgentResponse(ok=True, reply_text="✅ registrado"))
-    for agent in ("expenses", "incomes", "reporting")
+    for agent in ("expenses", "incomes", "reporting", "users")
 }
 
 
@@ -352,6 +360,86 @@ def _run_hybrid_routing() -> tuple[list[dict], dict]:
     return _run_routing_dataset(_hybrid_route)
 
 
+# Fixed settings every users_agent.json case runs against. Counts decide whether a change
+# needs confirmation (records > 0), so they're part of the expected answers.
+_USERS_OVERVIEW = {
+    "personal": [
+        ("comida", "expense", True, 12), ("transporte", "expense", True, 5),
+        ("mercado", "expense", True, 4), ("ropa", "expense", True, 0),
+        ("hogar", "expense", True, 2), ("otro", "expense", True, 1),
+        ("viajes", "expense", False, 2),
+        ("salario", "income", True, 3), ("freelance", "income", True, 0),
+        ("otro", "income", True, 0),
+    ],
+    "business": [
+        ("insumos", "expense", True, 10), ("nómina", "expense", True, 2),
+        ("arriendo", "expense", True, 1), ("otro", "expense", True, 0),
+        ("ventas", "income", True, 20), ("servicios", "income", True, 0),
+        ("otro", "income", True, 0),
+    ],
+}
+_CATEGORY_TOOLS = {"add": "add_category", "rename": "rename_category",
+                   "deactivate": "deactivate_category"}
+
+
+def _users_decide(case: dict) -> dict:
+    """Live users-agent call on one case with the database stubbed: returns the first
+    change it made or proposed ({action, args, confirmation}) — nothing is written."""
+    profile = case["profile"]
+    overview = [
+        {"id": i, "name": n, "kind": k, "active": a, "records": r}
+        for i, (n, k, a, r) in enumerate(_USERS_OVERVIEW[profile["type"]], start=1)
+    ]
+    prefs = {"profile": profile, "default_currency": "COP", "onboarding": {"status": "done"}}
+    changes: list[dict] = []
+
+    def change_category(user_id, kind, action, name, new_name=None, source="users_agent"):
+        args = {"kind": kind, "name": name, **({"new_name": new_name} if new_name else {})}
+        changes.append({"action": _CATEGORY_TOOLS[action], "args": args, "confirmation": False})
+        return {"status": {"add": "added", "rename": "renamed", "deactivate": "deactivated"}[action],
+                "name": new_name or name}
+
+    def append_user_prefs(user_id, delta, source="manual", replace=False):
+        pending = delta.get("pending_action")
+        if pending:
+            args = {k: v for k, v in pending.items() if k not in ("tool", "question", "asked_at")}
+            changes.append({"action": pending["tool"], "args": args, "confirmation": True})
+        elif "profile" in delta:
+            changes.append({"action": "update_business_details",
+                            "args": delta["profile"].get("business") or {}, "confirmation": False})
+        return 1
+
+    request = AgentRequest(
+        user_id=0, message_id=0, phone="+570000000000", text=case["input"], media=[],
+        message_type="text", now=datetime.now(ZoneInfo(TIMEZONE)).isoformat(),
+        conversation=case.get("conversation", []), profile=profile,
+    )
+    try:
+        with patch.object(users_agent, "get_category_overview", return_value=overview), \
+                patch.object(users_agent, "get_user_prefs", return_value=prefs), \
+                patch.object(users_agent, "change_category", side_effect=change_category), \
+                patch.object(users_agent, "append_user_prefs", side_effect=append_user_prefs):
+            users_agent.handle(request)
+    except Exception as exc:  # an API error is a failed case, not a crashed run
+        return {"action": f"error:{type(exc).__name__}", "args": {}, "confirmation": False}
+    return changes[0] if changes else {"action": "none", "args": {}, "confirmation": False}
+
+
+def _run_users_agent() -> tuple[list[dict], dict]:
+    scores = []
+    for case in _load_dataset("users_agent"):
+        score = score_users(_users_decide(case), case["expected"])
+        score["id"] = case["id"]
+        scores.append(score)
+    n = len(scores)
+    metrics: dict[str, int | float] = {"n": n}
+    metrics["overall"] = sum(1 for s in scores if s["all_correct"]) / n
+    for field in ("action", "args", "confirmation"):
+        scored = [s for s in scores if field in s]
+        metrics[field] = sum(1 for s in scored if s[field]["correct"]) / len(scored)
+    return scores, metrics
+
+
 _WIDTH = 54
 
 
@@ -380,7 +468,7 @@ def _print_section(title: str, scores: list[dict], metrics: dict) -> None:
             for field, fdata in exp_score.get("fields", {}).items():
                 if not fdata["correct"]:
                     print(f"      {field}: expected={fdata['expected']!r}  got={fdata['actual']!r}")
-        for field in ("min_date", "max_date", "route", "agents"):
+        for field in ("min_date", "max_date", "route", "agents", "action", "args", "confirmation"):
             if field in s and not s[field]["correct"]:
                 print(f"      {field}: expected={s[field]['expected']!r}  got={s[field]['actual']!r}")
 
@@ -405,8 +493,8 @@ def main() -> None:
     )
     arg_parser.add_argument(
         "--only",
-        choices=["routing"],
-        help="Run a single eval group. 'routing' needs only ANTHROPIC_API_KEY.",
+        choices=["routing", "users"],
+        help="Run a single eval group. 'routing' and 'users' need only ANTHROPIC_API_KEY.",
     )
     args = arg_parser.parse_args()
 
@@ -417,6 +505,14 @@ def main() -> None:
         if setup_tracing():
             print("Phoenix tracing enabled.")
         _finish(_run_routing_sections(args.check, has_anthropic_key))
+        return
+
+    if args.only == "users":
+        if not has_anthropic_key:
+            sys.exit("ANTHROPIC_API_KEY not configured. Add it to your .env file.")
+        if setup_tracing():
+            print("Phoenix tracing enabled.")
+        _finish(_run_users_section(args.check))
         return
 
     api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -464,6 +560,8 @@ def main() -> None:
             threshold_failures.extend(
                 _check_thresholds("reporting_agent", metrics_report_agent)
             )
+
+        threshold_failures.extend(_run_users_section(args.check))
     else:
         print(
             "\nSkipping expense_agent/income_agent/reporting_agent (Claude) evals — "
@@ -499,6 +597,13 @@ def _run_routing_sections(check: bool, has_anthropic_key: bool) -> list[str]:
     if check:
         failures.extend(_check_thresholds("hybrid_routing", metrics_hybrid))
     return failures
+
+
+def _run_users_section(check: bool) -> list[str]:
+    print("\nRunning users_agent (Claude) on users_agent.json, database stubbed...")
+    scores, metrics = _run_users_agent()
+    _print_section("users_agent", scores, metrics)
+    return _check_thresholds("users_agent", metrics) if check else []
 
 
 def _finish(threshold_failures: list[str]) -> None:

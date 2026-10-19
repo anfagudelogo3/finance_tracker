@@ -46,8 +46,12 @@ ROUTER_MAX_DELEGATIONS = 3        # specialist calls allowed per message
 AGENT_LOOP_TIMEOUT_SECONDS = 12   # stays under Twilio's 15 s webhook timeout
 ROUTER_MAX_INPUT_CHARS = 1000     # longer messages are truncated before routing
 
-# User profile (users.prefs.profile) used when a user has none set
+# User profile (user_prefs → profile) used when a user has none set
 DEFAULT_PROFILE = {"type": "personal"}
+DEFAULT_CURRENCY = "COP"
+
+# Every date and timestamp the app produces is in this zone (code and DB session)
+TIMEZONE = "America/Bogota"
 
 # S3
 PRESIGNED_URL_EXPIRY_SECONDS = 60
@@ -63,6 +67,48 @@ DEFAULT_EXPENSE_CATEGORIES = [
 DEFAULT_INCOME_CATEGORIES = [
     "salario", "freelance", "negocio", "inversion", "reembolso", "regalo", "otro",
 ]
+# Business profiles get their own fixed defaults (seeded by onboarding, Phase 6b)
+DEFAULT_BUSINESS_EXPENSE_CATEGORIES = [
+    "insumos", "nómina", "arriendo", "servicios públicos", "impuestos",
+    "marketing", "transporte", "mantenimiento", "otro",
+]
+DEFAULT_BUSINESS_INCOME_CATEGORIES = ["ventas", "servicios", "otro"]
+
+# Short explanations shown next to the default categories during onboarding
+CATEGORY_HINTS = {
+    "comida": "restaurantes, almuerzos, domicilios",
+    "transporte": "bus, taxi, Uber, gasolina",
+    "mercado": "supermercado y compras de la casa",
+    "salud": "médico, medicamentos, seguros",
+    "entretenimiento": "cine, salidas, suscripciones",
+    "hogar": "arriendo, reparaciones, cosas para la casa",
+    "educacion": "cursos, libros, matrículas",
+    "ropa": "ropa y calzado",
+    "servicios": "luz, agua, internet, celular",
+    "salario": "tu sueldo o quincena",
+    "freelance": "pagos por trabajos independientes",
+    "negocio": "ingresos de un negocio propio",
+    "inversion": "intereses, dividendos, rendimientos",
+    "reembolso": "dinero que te devuelven",
+    "regalo": "dinero que te regalan",
+    "insumos": "materia prima y productos para vender",
+    "nómina": "salarios y pagos a empleados",
+    "arriendo": "local, bodega u oficina",
+    "servicios públicos": "luz, agua, gas, internet",
+    "impuestos": "IVA, renta, industria y comercio",
+    "marketing": "publicidad y redes sociales",
+    "mantenimiento": "reparaciones y equipos",
+    "ventas": "lo que vendes",
+    "otro": "todo lo que no encaje en las demás",
+}
+
+# Onboarding (Phase 6b) — see docs/design/phase-6-users-onboarding.md
+ONBOARDING_ABANDON_HOURS = 24      # an unfinished onboarding older than this starts over
+ONBOARDING_MAX_CATEGORIES = 25     # per kind
+ONBOARDING_CURRENCY_OPTIONS = ["COP", "USD", "EUR"]
+KEYWORD_SKIP = "omitir"
+KEYWORD_SKIP_ALL = "omitir todo"
+KEYWORD_RESTART = "reiniciar configuracion"   # compared accent-insensitively, whole message
 
 # Conversation memory window (how much recent history the chatbot sees)
 CONVERSATION_MAX_TURNS = 8          # cap on number of recent turns loaded
@@ -82,3 +128,104 @@ MSG_ROUTER_EMPTY = (
 )
 MSG_DELEGATION_FAILED = "⚠️ No pude procesar: {task}"
 MSG_PARTIAL_TIMEOUT = "⚠️ No alcancé a terminar todo. Revisa lo registrado e intenta de nuevo con lo que faltó."
+
+# Onboarding messages (Phase 6b). {placeholders} are filled in agents/onboarding.py.
+MSG_ONBOARDING_WELCOME = (
+    "👋 ¡Hola! Soy tu asistente financiero personal, aquí mismo en WhatsApp.\n\n"
+    "Olvídate de hojas de cálculo y apps complicadas: solo escríbeme o mándame una nota de voz "
+    "como le hablarías a un amigo —_\"almuerzo 25 mil\"_, _\"me pagaron la quincena\"_— y yo me "
+    "encargo de organizarlo todo. 💸\n\n"
+    "Con mi ayuda vas a:\n"
+    "✅ Saber exactamente en qué se va tu dinero\n"
+    "✅ Registrar gastos e ingresos en segundos, por texto, voz o foto del recibo\n"
+    "✅ Pedir resúmenes cuando quieras: _\"¿cuánto gasté este mes?\"_\n"
+    "✅ Descargar tus movimientos en Excel\n\n"
+    "Tomar el control de tus finanzas nunca fue tan fácil. Antes de empezar, te haré unas "
+    "preguntas rápidas para adaptarme a ti (menos de 2 minutos). 🚀"
+)
+MSG_ONBOARDING_RESTART = (
+    "🔄 Vamos a configurar tu cuenta de nuevo. Tu tipo de perfil se mantiene; "
+    "te preguntaré por tu moneda y tus categorías."
+)
+MSG_ONBOARDING_SKIP_HINT = "_(escribe *omitir* para saltar esta pregunta u *omitir todo* para terminar)_"
+MSG_ONBOARDING_Q_PROFILE = (
+    "¿Para qué vas a usar el asistente?\n\n"
+    "1. *Personal* — tus finanzas del día a día: comida, transporte, servicios, tu salario…\n"
+    "2. *Negocio* — las ventas y los gastos de tu emprendimiento o empresa: insumos, nómina, "
+    "arriendo…\n\n"
+    "Responde con el número."
+)
+MSG_ONBOARDING_Q_BUSINESS = (
+    "🏪 Cuéntame de tu negocio en un solo mensaje: ¿cómo se llama, de qué es, qué vende y "
+    "cuáles son sus gastos principales?\n\n"
+    "Ej: _\"La Sazón de Ana, un restaurante. Vendo almuerzos y domicilios; mis gastos son "
+    "insumos, nómina y arriendo.\"_"
+)
+MSG_ONBOARDING_Q_CURRENCY = (
+    "💱 ¿Cuál es tu moneda principal? La usaré cuando no me digas la moneda de un gasto o "
+    "ingreso.\n\n"
+    "1. COP — peso colombiano\n"
+    "2. USD — dólar\n"
+    "3. EUR — euro\n\n"
+    "O escríbeme otra (ej. MXN)."
+)
+MSG_ONBOARDING_Q_CATEGORIES = (
+    "{icon} Para tus *{label}* uso estas categorías:\n{categories}\n\n"
+    "1. Usar estas\n"
+    "2. Personalizarlas\n\n"
+    "También puedes decirme directamente qué cambiar, ej. _\"{example}\"_."
+)
+MSG_ONBOARDING_Q_CUSTOMIZE = (
+    "¿Qué quieres cambiar en tus categorías de {label}? Puedes agregar, quitar o renombrar, "
+    "ej. _\"{example}\"_."
+)
+MSG_ONBOARDING_CATEGORIES_SET = "✅ Tus categorías de {label}: {categories}."
+MSG_ONBOARDING_REMINDER = "Para empezar necesito terminar tu configuración (o escribe *omitir*)."
+MSG_ONBOARDING_DONE = (
+    "🎉 ¡Listo! Tu cuenta quedó configurada:\n"
+    "• Perfil: {profile}\n"
+    "• Moneda: {currency}\n"
+    "• Gastos: {expense_categories}\n"
+    "• Ingresos: {income_categories}\n\n"
+    "Ya puedes escribirme tus gastos e ingresos. Si quieres cambiar algo, solo dímelo "
+    "(ej. _\"agrega la categoría mascotas\"_) o escribe *reiniciar configuración*."
+)
+MSG_ONBOARDING_HELD = "Antes de empezar me escribiste: _\"{text}\"_. ¿Lo registro?\n\n1. Sí\n2. No"
+MSG_ONBOARDING_HELD_IMAGE = "Antes de empezar me enviaste una foto: envíamela de nuevo para registrarla."
+MSG_ONBOARDING_HELD_DISCARDED = "Listo, no lo registré."
+
+# Users agent (Phase 6c) — settings, categories, help. Multi-step (tool loop), so it runs
+# on the router's model; only reached when the router delegates a settings request.
+CLAUDE_USERS_MODEL = "claude-haiku-5-5"
+USERS_EFFORT = "low"
+USERS_MAX_TOKENS = 2048
+USERS_MAX_ITERATIONS = 6          # safeguard only, like the router
+USERS_TIMEOUT_SECONDS = 8         # runs inside the router loop (12 s), which must fit Twilio's 15 s
+
+# A destructive change waits for a "sí" on the very next message (else it's cancelled)
+PENDING_ACTION_MINUTES = 30       # an older confirmation question no longer counts
+MSG_CONFIRM_RENAME = (
+    "La categoría *{name}* tiene {records} registro(s). Si la renombro a *{new_name}*, esos "
+    "registros también aparecerán como *{new_name}*. ¿Confirmas?\n\n1. Sí\n2. No"
+)
+MSG_CONFIRM_MERGE = (
+    "Ya tienes la categoría *{new_name}*. Si renombro *{name}* a *{new_name}*, sus "
+    "{records} registro(s) pasarán a *{new_name}* y *{name}* quedará desactivada. "
+    "¿Confirmas?\n\n1. Sí\n2. No"
+)
+MSG_CONFIRM_DEACTIVATE = (
+    "La categoría *{name}* tiene {records} registro(s). Si la desactivo no la usaré para "
+    "nuevos registros, pero tus reportes anteriores la seguirán mostrando. ¿Confirmas?"
+    "\n\n1. Sí\n2. No"
+)
+MSG_CONFIRM_CURRENCY = (
+    "¿Cambio tu moneda principal de {old} a {new}? Solo aplica a los registros nuevos; los "
+    "anteriores conservan su moneda.\n\n1. Sí\n2. No"
+)
+MSG_ACTION_CANCELLED = "Listo, no hice ningún cambio."
+MSG_CATEGORY_RENAMED = "✅ Renombré la categoría *{old}* a *{name}*."
+MSG_CATEGORY_MERGED = "✅ Pasé {records} registro(s) de *{old}* a *{name}* y desactivé *{old}*."
+MSG_CATEGORY_DEACTIVATED = (
+    "✅ Desactivé la categoría *{name}*. Tus reportes anteriores la siguen mostrando."
+)
+MSG_CURRENCY_CHANGED = "✅ Tu moneda principal ahora es {code}."
