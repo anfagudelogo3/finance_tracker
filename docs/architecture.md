@@ -64,11 +64,13 @@ All application code lives in the [`finance_tracker`](../src/finance_tracker) pa
 |--------|----------------|
 | [`handler.py`](../src/finance_tracker/handler.py) | Lambda handler; runs the pipeline and picks the branch (Excel / report / image / text-audio) |
 | [`config.py`](../src/finance_tracker/config.py) | Load all configuration from environment variables; tunable constants and reply strings |
-| [`core/agent_types.py`](../src/finance_tracker/core/agent_types.py) | `AgentRequest` / `AgentResponse`, the contract every agent implements |
+| [`core/agent_types.py`](../src/finance_tracker/core/agent_types.py) | `AgentRequest` / `AgentResponse`, the contract every agent implements (incl. the user `profile`) |
+| [`core/agent_loop.py`](../src/finance_tracker/core/agent_loop.py) | Claude tool-use loop: runs until `end_turn`; max iterations / timeout as safeguards |
 | [`core/claude_client.py`](../src/finance_tracker/core/claude_client.py) | Anthropic client singleton |
 | [`core/confidence.py`](../src/finance_tracker/core/confidence.py), [`core/text.py`](../src/finance_tracker/core/text.py) | Confidence heuristic; accent-insensitive text normalization |
-| [`routing/fast_paths.py`](../src/finance_tracker/routing/fast_paths.py) | All deterministic keyword checks (Excel, report, income) |
-| [`routing/orchestrator.py`](../src/finance_tracker/routing/orchestrator.py) | Dispatches a request to the matching agent |
+| [`routing/fast_paths.py`](../src/finance_tracker/routing/fast_paths.py) | All deterministic keyword checks (Excel, report, income) and `fast_route`, the narrowed free path in front of the router |
+| [`routing/orchestrator.py`](../src/finance_tracker/routing/orchestrator.py) | Hybrid dispatch: `fast_route` when unambiguous, otherwise the router |
+| [`routing/router_agent.py`](../src/finance_tracker/routing/router_agent.py) | Claude router: delegates to agents as tools, asks for clarification, or declines; assembles the reply |
 | [`agents/expenses.py`](../src/finance_tracker/agents/expenses.py), [`agents/incomes.py`](../src/finance_tracker/agents/incomes.py) | Claude extraction + persistence of expenses / incomes |
 | [`agents/reporting.py`](../src/finance_tracker/agents/reporting.py) | Date-range resolution (deterministic + Claude fallback) and in-chat reports |
 | [`agents/report_format.py`](../src/finance_tracker/agents/report_format.py) | Format in-chat spending summaries grouped by currency and category |

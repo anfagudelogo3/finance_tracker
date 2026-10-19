@@ -6,6 +6,7 @@ so every keyword signal lives in one module.
 """
 
 import logging
+import re
 from difflib import get_close_matches
 
 from finance_tracker.config import FUZZY_MATCH_CUTOFF
@@ -177,3 +178,164 @@ def is_income_request(text: str) -> bool:
     """
     normalized = normalize(text)
     return any(kw in normalized for kw in _INCOME_KEYWORDS_PHRASE)
+
+
+# ── Phase 5: the narrowed fast paths in front of the router ────────────────────────
+#
+# A fast path has no LLM behind it to catch its mistakes, so it fires only when the
+# intent is unambiguous and otherwise returns None and lets the router decide. The
+# Phase 4 keyword checks above stay as-is for the signals they provide; fast_route adds
+# the guards (docs/agent-roadmap.md §4.6). tests/routing/test_fast_paths.py checks
+# that fast_route is never wrong on evals/datasets/route_message.json.
+
+# Words that make a message multi-intent or a follow-up ("y otro de 15000", "almuerzo
+# 20k y me pagaron 2M"). ", " too, but not "," alone — "1,5" is a number.
+_CONJUNCTIONS = {"y", "e", "and", "tambien", "ademas", "luego"}
+
+# Anything destructive, prompt-injection-like, or about someone else's data goes to the
+# router (which can decline) — never straight to an agent.
+_BLOCKED_WORDS = {
+    "borra",
+    "borrar",
+    "borrame",
+    "elimina",
+    "eliminar",
+    "eliminame",
+    "delete",
+    "ignora",
+    "ignore",
+    "instrucciones",
+    "instructions",
+    "prompt",
+    "sistema",
+    "system",
+}
+# "+57…" or a 10+ digit run (a phone number); amounts like 2000000 are shorter.
+_PHONE_LIKE = re.compile(r"\+\d|\d{10,}")
+
+# Clear spending words for the simple-expense fast path. Token match, not substring
+# ("gas" must not match "gasolina", "compra" is not "compré").
+_EXPENSE_WORDS = {
+    # verbs
+    "pague",
+    "gaste",
+    "compre",
+    "paid",
+    "spent",
+    "bought",
+    # food
+    "almuerzo",
+    "desayuno",
+    "cena",
+    "comida",
+    "onces",
+    "tinto",
+    "cafe",
+    "coffee",
+    "lunch",
+    "dinner",
+    "breakfast",
+    "mercado",
+    "supermercado",
+    "domicilio",
+    "rappi",
+    # transport
+    "uber",
+    "taxi",
+    "bus",
+    "transmilenio",
+    "metro",
+    "gasolina",
+    "parqueadero",
+    "peaje",
+    "didi",
+    "cabify",
+    # home & services
+    "arriendo",
+    "rent",
+    "luz",
+    "agua",
+    "internet",
+    "celular",
+    "netflix",
+    "spotify",
+    # health, leisure, other
+    "farmacia",
+    "drogueria",
+    "medicina",
+    "medico",
+    "cine",
+    "ropa",
+    "zapatos",
+    "gimnasio",
+    "gym",
+}
+_MAX_SIMPLE_EXPENSE_WORDS = 7
+_MAX_SINGLE_REPORT_WORD_MESSAGE = 3  # "resumen", "mi balance" — not "borra mis gastos"
+
+
+def _tokens(normalized: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", normalized)
+
+
+def _has_pending_question(conversation: list[dict] | None) -> bool:
+    """True if the assistant's last turn asked something — the reply is an answer
+    ("fue un gasto, mercado") that needs history, so the router handles it."""
+    for turn in reversed(conversation or []):
+        if turn.get("role") == "assistant":
+            return turn.get("content", "").strip().endswith("?")
+    return False
+
+
+def _is_guarded(text: str, normalized: str, tokens: list[str]) -> bool:
+    return (
+        any(t in _CONJUNCTIONS for t in tokens)
+        or ", " in text
+        or ";" in text
+        or any(t in _BLOCKED_WORDS for t in tokens)
+        or bool(_PHONE_LIKE.search(normalized))
+    )
+
+
+def _is_fast_report(normalized: str, tokens: list[str]) -> bool:
+    """Report phrases ("cuanto gaste", "mis gastos de") anywhere, single report words
+    only in a tiny message. No fuzzy matching: it was the main source of misroutes."""
+    if any(kw in normalized for kw in _REPORT_KEYWORDS_PHRASE):
+        return True
+    return len(tokens) <= _MAX_SINGLE_REPORT_WORD_MESSAGE and any(
+        t in _REPORT_KEYWORDS_SINGLE for t in tokens
+    )
+
+
+def fast_route(
+    text: str, profile: dict | None, conversation: list[dict] | None = None
+) -> str | None:
+    """Return "reporting" | "incomes" | "expenses" when the message can skip the
+    router, or None to send it to the router.
+
+    Only for personal profiles: the keywords know nothing about a business ("almuerzo
+    20 mil" can be a restaurant's sale), so every business message goes to the router.
+    """
+    if (profile or {}).get("type", "personal") != "personal":
+        return None
+    if not text or _has_pending_question(conversation):
+        return None
+
+    normalized = normalize(text)
+    tokens = _tokens(normalized)
+    if _is_guarded(text, normalized, tokens):
+        return None
+
+    if _is_fast_report(normalized, tokens):
+        return "reporting"
+
+    has_amount = any(t[0].isdigit() for t in tokens)
+    if not has_amount:
+        return None
+    if is_income_request(text):
+        return "incomes"
+    if len(tokens) <= _MAX_SIMPLE_EXPENSE_WORDS and any(
+        t in _EXPENSE_WORDS for t in tokens
+    ):
+        return "expenses"
+    return None

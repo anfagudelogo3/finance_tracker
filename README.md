@@ -97,8 +97,11 @@ cp .env.example .env
 | `TWILIO_AUTH_TOKEN` | Twilio Auth Token |
 | `TWILIO_WHATSAPP_NUMBER` | Twilio sandbox number (e.g. `whatsapp:+14155238886`) |
 | `ALLOWED_PHONE_NUMBERS` | Comma-separated allowed senders (e.g. `+573001234567,+573009876543`) |
-| `OPENAI_API_KEY` | OpenAI API key |
+| `ANTHROPIC_API_KEY` | Anthropic API key (Claude router + agents) |
+| `OPENAI_API_KEY` | OpenAI API key (Whisper, image expenses, Excel dates) |
 | `DATABASE_URL` | Neon PostgreSQL connection string |
+| `S3_BUCKET_NAME` | Bucket for inbound media and Excel exports |
+| `WEBHOOK_URL` | Exact webhook URL configured in Twilio (used to verify signatures) |
 
 ### 4. Create the database
 

@@ -24,7 +24,13 @@ from finance_tracker.legacy.openai_parser import parse_expense, parse_report_req
 from finance_tracker.agents.expenses import _extract as _extract_expense_claude
 from finance_tracker.agents.incomes import _extract as _extract_income_claude
 from finance_tracker.agents.reporting import resolve_date_range
-from finance_tracker.routing.fast_paths import is_income_request, is_report_request
+from finance_tracker.routing.fast_paths import (
+    fast_route,
+    is_income_request,
+    is_report_request,
+)
+from finance_tracker.routing import router_agent
+from finance_tracker.core.agent_types import AgentRequest, AgentResponse
 from finance_tracker.config import DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES
 from evals.scoring import score_expense, score_date_range, score_routing
 
@@ -48,7 +54,27 @@ DATASETS_DIR = Path(__file__).parent / "datasets"
 # 100% min_date, 100% max_date — confirming both parse_report_request failures (missing
 # "hoy" rule, unreliable weekday arithmetic for "la semana pasada") are fixed, not just
 # not-regressed. Same small-sample reasoning as expense_agent/income_agent.
+#
+# "router_agent" / "hybrid_routing" (Phase 5) are set with headroom below two observed
+# claude-haiku-5-5 (effort low) runs against route_message.json (n=55 scored): 100% on
+# every metric both times. Not pinned to 100% — small sample, and a few cases overlap
+# examples in the router prompt. no_false_decline stays strict: refusing a real finance
+# message loses a record. fast_path_precision must stay at 100% — nothing catches a
+# wrong fast path (tests/routing/test_fast_paths.py enforces the same offline).
 THRESHOLDS: dict[str, dict[str, float]] = {
+    "router_agent": {
+        "overall": 0.90,
+        "no_false_decline": 0.98,
+        "profile:business": 0.80,
+        "adversarial": 0.80,
+    },
+    "hybrid_routing": {
+        "overall": 0.90,
+        "no_false_decline": 0.98,
+        "profile:business": 0.80,
+        "adversarial": 0.80,
+        "fast_path_precision": 1.0,
+    },
     "parse_expense": {
         "overall": 0.85,
         "amount": 0.95,
@@ -282,6 +308,50 @@ def _run_keyword_routing_baseline() -> tuple[list[dict], dict]:
     return _run_routing_dataset(_keyword_route)
 
 
+# Stand-ins for the specialists during routing evals: the router's decision is what's
+# scored, so no DB writes and no extra extraction calls.
+_STUB_HANDLERS = {
+    agent: (lambda request: AgentResponse(ok=True, reply_text="✅ registrado"))
+    for agent in ("expenses", "incomes", "reporting")
+}
+
+
+def _router_route(case: dict) -> dict:
+    """Live Claude router call (Phase 5) on one case, specialists stubbed."""
+    request = AgentRequest(
+        user_id=0,
+        message_id=0,
+        phone="+570000000000",
+        text=case["input"],
+        media=[],
+        message_type="text",
+        now="2026-06-25T10:00:00-05:00",
+        conversation=case.get("conversation", []),
+        profile=case["profile"],
+    )
+    try:
+        result = router_agent.route(request, _STUB_HANDLERS)
+    except Exception as exc:  # an API error is a failed case, not a crashed run
+        return {"route": f"error:{type(exc).__name__}", "agents": [], "via": "router"}
+    return {"route": result.route, "agents": result.agents, "via": "router"}
+
+
+def _hybrid_route(case: dict) -> dict:
+    """What production does (orchestrator.handle_message): fast path, else router."""
+    agent = fast_route(case["input"], case["profile"], case.get("conversation"))
+    if agent:
+        return {"route": "agents", "agents": [agent], "via": "fast_path"}
+    return _router_route(case)
+
+
+def _run_router_agent() -> tuple[list[dict], dict]:
+    return _run_routing_dataset(_router_route)
+
+
+def _run_hybrid_routing() -> tuple[list[dict], dict]:
+    return _run_routing_dataset(_hybrid_route)
+
+
 _WIDTH = 54
 
 
@@ -333,14 +403,25 @@ def main() -> None:
         action="store_true",
         help="Exit with code 1 if any metric falls below its threshold",
     )
+    arg_parser.add_argument(
+        "--only",
+        choices=["routing"],
+        help="Run a single eval group. 'routing' needs only ANTHROPIC_API_KEY.",
+    )
     args = arg_parser.parse_args()
+
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    has_anthropic_key = bool(anthropic_key) and anthropic_key != "sk-ant-not-set"
+
+    if args.only == "routing":
+        if setup_tracing():
+            print("Phoenix tracing enabled.")
+        _finish(_run_routing_sections(args.check, has_anthropic_key))
+        return
 
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key or api_key == "sk-not-set":
         sys.exit("OPENAI_API_KEY not configured. Add it to your .env file.")
-
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    has_anthropic_key = bool(anthropic_key) and anthropic_key != "sk-ant-not-set"
 
     if setup_tracing():
         print("Phoenix tracing enabled.")
@@ -359,10 +440,7 @@ def main() -> None:
     if args.check:
         threshold_failures.extend(_check_thresholds("parse_report_request", metrics_rep))
 
-    # Deterministic, no API calls. Informational only — no thresholds: it's the
-    # "before" number the Phase 5 router is measured against, not a gate.
-    scores_route, metrics_route = _run_keyword_routing_baseline()
-    _print_section("routing — keyword baseline (Phase 4)", scores_route, metrics_route)
+    threshold_failures.extend(_run_routing_sections(args.check, has_anthropic_key))
 
     if has_anthropic_key:
         print("\nRunning expense_agent (Claude) against the same dataset for parity...")
@@ -392,6 +470,38 @@ def main() -> None:
             "ANTHROPIC_API_KEY not configured. Add it to your .env file to run them."
         )
 
+    _finish(threshold_failures)
+
+
+def _run_routing_sections(check: bool, has_anthropic_key: bool) -> list[str]:
+    """Keyword baseline (free), then the live router alone and the hybrid path
+    (fast paths first, router for the rest — what production runs)."""
+    failures: list[str] = []
+
+    # Deterministic, no API calls. Informational only — no thresholds: it's the
+    # "before" number the Phase 5 router is measured against, not a gate.
+    scores_route, metrics_route = _run_keyword_routing_baseline()
+    _print_section("routing — keyword baseline (Phase 4)", scores_route, metrics_route)
+
+    if not has_anthropic_key:
+        print("\nSkipping router / hybrid routing evals — ANTHROPIC_API_KEY not configured.")
+        return failures
+
+    print("\nRunning router_agent (Claude) on every case, specialists stubbed...")
+    scores_router, metrics_router = _run_router_agent()
+    _print_section("routing — router_agent alone", scores_router, metrics_router)
+    if check:
+        failures.extend(_check_thresholds("router_agent", metrics_router))
+
+    print("\nRunning hybrid routing (fast paths, then router) — the production path...")
+    scores_hybrid, metrics_hybrid = _run_hybrid_routing()
+    _print_section("routing — hybrid (production)", scores_hybrid, metrics_hybrid)
+    if check:
+        failures.extend(_check_thresholds("hybrid_routing", metrics_hybrid))
+    return failures
+
+
+def _finish(threshold_failures: list[str]) -> None:
     if threshold_failures:
         print(f"\n{'─' * _WIDTH}")
         print("Threshold failures:")

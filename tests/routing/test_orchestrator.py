@@ -116,3 +116,31 @@ class TestHandleMessage:
         mock_reporting_agent.handle.assert_called_once_with(request)
         mock_income_agent.handle.assert_not_called()
         assert result == "report-response"
+
+
+class TestRouterFallback:
+    @patch("finance_tracker.routing.orchestrator.router_agent")
+    @patch("finance_tracker.routing.orchestrator.expenses")
+    def test_unclear_message_goes_to_router(self, mock_expense_agent, mock_router):
+        mock_router.handle.return_value = "router-response"
+        request = _request("nequi 50000")
+
+        result = orchestrator.handle_message(request)
+
+        mock_router.handle.assert_called_once_with(request)
+        mock_expense_agent.handle.assert_not_called()
+        assert result == "router-response"
+
+    @patch("finance_tracker.routing.orchestrator.router_agent")
+    @patch("finance_tracker.routing.orchestrator.expenses")
+    def test_business_profile_skips_fast_paths(self, mock_expense_agent, mock_router):
+        request = _request("almuerzo 32000")
+        request.profile = {
+            "type": "business",
+            "business": {"industry": "restaurante", "description": "Vende almuerzos"},
+        }
+
+        orchestrator.handle_message(request)
+
+        mock_router.handle.assert_called_once_with(request)
+        mock_expense_agent.handle.assert_not_called()

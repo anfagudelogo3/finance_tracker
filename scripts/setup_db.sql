@@ -4,6 +4,7 @@
 -- RESET block once, then run the CREATE statements.
 
 -- ── RESET (run once to wipe everything) ─────────────────────────────────────────
+-- DROP TABLE IF EXISTS user_prefs CASCADE;
 -- DROP TABLE IF EXISTS budgets CASCADE;
 -- DROP TABLE IF EXISTS incomes CASCADE;
 -- DROP TABLE IF EXISTS expenses CASCADE;
@@ -17,7 +18,20 @@ CREATE TABLE IF NOT EXISTS users (
     id          SERIAL PRIMARY KEY,
     phone       VARCHAR(20) UNIQUE NOT NULL,
     name        VARCHAR(100),
-    prefs       JSONB NOT NULL DEFAULT '{}',
+    prefs       JSONB NOT NULL DEFAULT '{}',              -- DEPRECATED: superseded by user_prefs
+    created_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- ── user_prefs (append-only preference history) ─────────────────────────────────
+-- Every preference change INSERTs a new row with the FULL preferences snapshot; rows are
+-- never updated or deleted. The current preferences of a user are their latest row
+-- (ORDER BY created_at DESC, id DESC LIMIT 1). `changes` holds only the keys that changed.
+CREATE TABLE IF NOT EXISTS user_prefs (
+    id          SERIAL PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    prefs       JSONB NOT NULL,                           -- full snapshot after the change
+    changes     JSONB,                                    -- the changed keys only
+    source      VARCHAR(20) NOT NULL DEFAULT 'manual',    -- onboarding | users_agent | manual | migration
     created_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -101,6 +115,7 @@ CREATE TABLE IF NOT EXISTS budgets (
 
 -- ── indexes ───────────────────────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_messages_user        ON messages (user_id);
+CREATE INDEX IF NOT EXISTS idx_user_prefs_latest    ON user_prefs (user_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_turns_user_created   ON conversation_turns (user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_categories_user      ON categories (user_id, kind);
 CREATE INDEX IF NOT EXISTS idx_expenses_user        ON expenses (user_id);

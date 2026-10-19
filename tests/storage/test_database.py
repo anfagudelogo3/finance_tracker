@@ -9,6 +9,8 @@ from finance_tracker.storage.database import (
     get_user_categories,
     save_turn,
     load_recent_turns,
+    get_user_prefs,
+    append_user_prefs,
 )
 
 
@@ -152,3 +154,59 @@ class TestConversationMemory:
 
         assert result[0]["content"] == "almuerzo 32000"
         assert result[1]["role"] == "assistant"
+
+
+class TestUserPrefs:
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_get_reads_latest_row(self, mock_get_conn):
+        mock_cursor = _mock_connection(mock_get_conn)
+        mock_cursor.fetchone.return_value = {"prefs": {"profile": {"type": "business"}}}
+
+        result = get_user_prefs(7)
+
+        assert result == {"profile": {"type": "business"}}
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "FROM user_prefs" in sql
+        assert "ORDER BY created_at DESC, id DESC" in sql
+        assert "LIMIT 1" in sql
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_get_returns_empty_dict_when_never_set(self, mock_get_conn):
+        mock_cursor = _mock_connection(mock_get_conn)
+        mock_cursor.fetchone.return_value = None
+
+        assert get_user_prefs(7) == {}
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_append_inserts_merged_snapshot_never_updates(self, mock_get_conn):
+        mock_cursor = _mock_connection(mock_get_conn)
+        mock_cursor.fetchone.side_effect = [
+            {"prefs": {"profile": {"type": "personal"}, "default_currency": "COP"}},
+            {"id": 55},  # RETURNING id
+        ]
+        changes = {"profile": {"type": "business", "business": {"industry": "restaurante", "description": "x"}}}
+
+        prefs_id = append_user_prefs(7, changes, source="users_agent")
+
+        assert prefs_id == 55
+        statements = [c[0][0] for c in mock_cursor.execute.call_args_list]
+        assert "FOR UPDATE" in statements[0]  # user row locked first
+        assert not any("UPDATE user_prefs" in s for s in statements)
+        insert_params = mock_cursor.execute.call_args_list[-1][0][1]
+        assert insert_params["prefs"].adapted == {
+            "profile": changes["profile"],
+            "default_currency": "COP",  # untouched keys carried forward
+        }
+        assert insert_params["changes"].adapted == changes
+        assert insert_params["source"] == "users_agent"
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_append_first_change_starts_from_empty(self, mock_get_conn):
+        mock_cursor = _mock_connection(mock_get_conn)
+        mock_cursor.fetchone.side_effect = [None, {"id": 1}]
+
+        append_user_prefs(7, {"default_currency": "USD"})
+
+        insert_params = mock_cursor.execute.call_args_list[-1][0][1]
+        assert insert_params["prefs"].adapted == {"default_currency": "USD"}
+        assert insert_params["source"] == "manual"

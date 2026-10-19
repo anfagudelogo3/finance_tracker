@@ -7,6 +7,13 @@ from finance_tracker.handler import _handle_message
 from finance_tracker.config import MSG_ERROR
 
 
+@pytest.fixture(autouse=True)
+def _no_user_prefs():
+    """Every handler test runs as a personal-profile user unless it overrides this."""
+    with patch("finance_tracker.handler.get_user_prefs", return_value={}) as mock:
+        yield mock
+
+
 def _make_event(body: str = "almuerzo 32000", message_id: str = "SM123") -> dict:
     form = {
         "From": "whatsapp:+573001234567",
@@ -300,3 +307,70 @@ class TestDuplicateMessage:
 
         assert result["statusCode"] == 200
         mock_orchestrator.handle_message.assert_not_called()
+
+
+class TestProfileWiring:
+    @patch("finance_tracker.handler.orchestrator")
+    @patch("finance_tracker.handler.send_message")
+    @patch("finance_tracker.handler.save_turn")
+    @patch("finance_tracker.handler.load_recent_turns")
+    @patch("finance_tracker.handler.save_message")
+    @patch("finance_tracker.handler.get_or_create_user")
+    @patch("finance_tracker.handler.verify_signature")
+    def test_agent_request_carries_latest_profile(
+        self,
+        mock_verify,
+        mock_get_user,
+        mock_save_message,
+        mock_load_recent_turns,
+        mock_save_turn,
+        mock_send_message,
+        mock_orchestrator,
+        _no_user_prefs,
+    ):
+        mock_verify.return_value = True
+        mock_get_user.return_value = 7
+        mock_save_message.return_value = 1
+        mock_load_recent_turns.return_value = []
+        business = {
+            "type": "business",
+            "business": {"industry": "restaurante", "description": "Vende almuerzos"},
+        }
+        _no_user_prefs.return_value = {"profile": business}
+        mock_orchestrator.handle_message.return_value = MagicMock(reply_text="ok")
+
+        # A report-looking message from a business user must not take the report
+        # fast path in handler.py — it reaches the orchestrator (and the router).
+        _handle_message(_make_event("cuánto vendí esta semana"))
+
+        _no_user_prefs.assert_called_once_with(7)
+        agent_request = mock_orchestrator.handle_message.call_args[0][0]
+        assert agent_request.profile == business
+
+    @patch("finance_tracker.handler.orchestrator")
+    @patch("finance_tracker.handler.send_message")
+    @patch("finance_tracker.handler.save_turn")
+    @patch("finance_tracker.handler.load_recent_turns")
+    @patch("finance_tracker.handler.save_message")
+    @patch("finance_tracker.handler.get_or_create_user")
+    @patch("finance_tracker.handler.verify_signature")
+    def test_missing_profile_defaults_to_personal(
+        self,
+        mock_verify,
+        mock_get_user,
+        mock_save_message,
+        mock_load_recent_turns,
+        mock_save_turn,
+        mock_send_message,
+        mock_orchestrator,
+    ):
+        mock_verify.return_value = True
+        mock_get_user.return_value = 7
+        mock_save_message.return_value = 1
+        mock_load_recent_turns.return_value = []
+        mock_orchestrator.handle_message.return_value = MagicMock(reply_text="ok")
+
+        _handle_message(_make_event("nequi 50000"))
+
+        agent_request = mock_orchestrator.handle_message.call_args[0][0]
+        assert agent_request.profile == {"type": "personal"}

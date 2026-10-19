@@ -13,6 +13,7 @@ by it; only the agent architecture built on top of this schema changed).
 ```
 users ──┬── messages ──── expenses (FK message_id, user_id)
         │             └── incomes  (FK message_id, user_id)
+        ├── user_prefs (append-only, latest row wins)
         ├── conversation_turns
         ├── categories
         └── budgets
@@ -28,8 +29,51 @@ phone). Written by [`database.get_or_create_user`](../src/finance_tracker/storag
 | `id` | `SERIAL` PK | Referenced by every other table |
 | `phone` | `VARCHAR(20) UNIQUE NOT NULL` | E.164, no `whatsapp:` prefix |
 | `name` | `VARCHAR(100)` | Optional display name |
-| `prefs` | `JSONB NOT NULL DEFAULT '{}'` | Free-form preferences (used by the Personal agent later) |
+| `prefs` | `JSONB NOT NULL DEFAULT '{}'` | **Deprecated, not read.** Preferences live in [`user_prefs`](#user_prefs-append-only-preference-history) |
 | `created_at` | `TIMESTAMPTZ` | |
+
+## `user_prefs` (append-only preference history)
+
+Every preference change **inserts a new row** with the full preferences snapshot; rows are
+never updated or deleted. A user's current preferences are their **latest row**
+(`ORDER BY created_at DESC, id DESC LIMIT 1`), read by
+[`database.get_user_prefs`](../src/finance_tracker/storage/database.py) and written only by
+`database.append_user_prefs` (which merges the change onto the latest snapshot inside a
+transaction that locks the user row). No row means no preferences set: the code treats the
+user as `{"profile": {"type": "personal"}}`.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `SERIAL` PK | Tie-breaker when two rows share `created_at` |
+| `user_id` | `INTEGER NOT NULL` FK → `users(id)` | `ON DELETE CASCADE` |
+| `prefs` | `JSONB NOT NULL` | Full snapshot after the change |
+| `changes` | `JSONB` | Only the keys that changed in this row |
+| `source` | `VARCHAR(20) NOT NULL DEFAULT 'manual'` | `onboarding` \| `users_agent` \| `manual` \| `migration` |
+| `created_at` | `TIMESTAMPTZ` | When the change was made |
+
+Keys in `prefs` (see [agent-roadmap.md](agent-roadmap.md) §5.1):
+
+```jsonc
+{
+  "profile": {"type": "personal"},                    // or {"type": "business", "business": {"name", "industry", "description"}}
+  "default_currency": "COP",                          // Phase 6
+  "report": {"default_period": "month", "group_by": "category"},  // Phase 6
+  "onboarding": {"step": "done", "completed_at": "..."}            // Phase 6
+}
+```
+
+Setting a profile by hand until the Phase 6 users agent exists:
+
+```sql
+-- First preferences row for user 7: snapshot and changes are the same object
+WITH p AS (SELECT '{"profile": {"type": "business", "business": {"industry": "restaurante",
+  "description": "Vende almuerzos. Compra insumos, paga nómina y arriendo."}}}'::jsonb AS v)
+INSERT INTO user_prefs (user_id, prefs, changes, source)
+SELECT 7, v, v, 'manual' FROM p;
+```
+
+(For a user who already has preferences, merge onto the latest snapshot instead, or use
+`database.append_user_prefs`.)
 
 ## `messages`
 
@@ -151,6 +195,7 @@ Per-currency budgets, either global or scoped to a category.
 | Index | Column(s) |
 |-------|-----------|
 | `idx_messages_user` | `messages(user_id)` |
+| `idx_user_prefs_latest` | `user_prefs(user_id, created_at DESC, id DESC)` — the latest-row lookup |
 | `idx_turns_user_created` | `conversation_turns(user_id, created_at)` |
 | `idx_categories_user` | `categories(user_id, kind)` |
 | `idx_expenses_user` | `expenses(user_id)` |
