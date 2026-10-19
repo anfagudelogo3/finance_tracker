@@ -66,7 +66,55 @@ def _seed_default_categories(cur, user_id: int) -> None:
         """,
         rows,
     )
+    # category_events is the append-only history of every category change
+    cur.execute(
+        """
+        INSERT INTO category_events (user_id, category_id, kind, action, new_name, source)
+        SELECT user_id, id, kind, 'add', name, 'seed' FROM categories
+        WHERE user_id = %(user_id)s;
+        """,
+        {"user_id": user_id},
+    )
     logger.debug("Seeded %d default categories for user id=%d", len(rows), user_id)
+
+
+def _resolve_category(cur, user_id: int, kind: str, name: str | None) -> dict:
+    """Return the user's category row ({id, name}) for a name the model picked.
+
+    Records store category_id, never the name, so a rename is a single-row change. The
+    agents constrain the model to the active names, but the legacy image parser doesn't:
+    an unknown name falls back to the user's 'otro', which is created if it's missing.
+    """
+    cur.execute(
+        """
+        SELECT id, name FROM categories
+        WHERE user_id = %(user_id)s AND kind = %(kind)s
+          AND lower(name) IN (lower(%(name)s), 'otro')
+        ORDER BY (lower(name) = lower(%(name)s)) DESC, active DESC
+        LIMIT 1;
+        """,
+        {"user_id": user_id, "kind": kind, "name": name or "otro"},
+    )
+    row = cur.fetchone()
+    if row is not None:
+        return row
+    cur.execute(
+        """
+        INSERT INTO categories (user_id, name, kind) VALUES (%(user_id)s, 'otro', %(kind)s)
+        RETURNING id, name;
+        """,
+        {"user_id": user_id, "kind": kind},
+    )
+    row = cur.fetchone()
+    cur.execute(
+        """
+        INSERT INTO category_events (user_id, category_id, kind, action, new_name, source)
+        VALUES (%(user_id)s, %(category_id)s, %(kind)s, 'add', 'otro', 'seed');
+        """,
+        {"user_id": user_id, "category_id": row["id"], "kind": kind},
+    )
+    logger.warning("Created missing 'otro' %s category for user id=%d", kind, user_id)
+    return row
 
 
 def get_user_categories(user_id: int, kind: str = "expense") -> list[str]:
@@ -222,13 +270,17 @@ def save_message(user_id: int, whatsapp_message_id: str, phone_number: str, raw_
 
 
 def save_expense(message_id: int, expense: dict, user_id: int) -> int:
-    """Insert a parsed expense linked to a message and user. Returns the new row ID."""
+    """Insert a parsed expense linked to a message and user. Returns the new row ID.
+
+    The category name is resolved to the user's category_id (unknown → 'otro'), and
+    expense["category"] is set to the stored name so the confirmation matches.
+    """
     query = """
         INSERT INTO expenses (
-            user_id, message_id, amount, currency, category, expense_date,
+            user_id, message_id, amount, currency, category_id, expense_date,
             payment_method, merchant, description, confidence, source
         ) VALUES (
-            %(user_id)s, %(message_id)s, %(amount)s, %(currency)s, %(category)s, %(date)s,
+            %(user_id)s, %(message_id)s, %(amount)s, %(currency)s, %(category_id)s, %(date)s,
             %(payment_method)s, %(merchant)s, %(description)s, %(confidence)s, %(source)s
         )
         RETURNING id;
@@ -239,6 +291,9 @@ def save_expense(message_id: int, expense: dict, user_id: int) -> int:
     expense.setdefault("source", "text")
     with get_connection() as conn:
         with conn.cursor() as cur:
+            category = _resolve_category(cur, user_id, "expense", expense.get("category"))
+            expense["category_id"] = category["id"]
+            expense["category"] = category["name"]
             cur.execute(query, expense)
             row_id = cur.fetchone()["id"]
             conn.commit()
@@ -251,14 +306,14 @@ def save_income(message_id: int, income: dict, user_id: int) -> int:
 
     Mirrors save_expense's pattern exactly, but `source` here means the money's origin
     ('manual' | 'gmail' | 'bank'), not the WhatsApp message channel — callers must not
-    pass a message_type value into it.
+    pass a message_type value into it. The category is resolved to an id like there.
     """
     query = """
         INSERT INTO incomes (
-            user_id, message_id, amount, currency, category, income_date,
+            user_id, message_id, amount, currency, category_id, income_date,
             description, confidence, source
         ) VALUES (
-            %(user_id)s, %(message_id)s, %(amount)s, %(currency)s, %(category)s, %(date)s,
+            %(user_id)s, %(message_id)s, %(amount)s, %(currency)s, %(category_id)s, %(date)s,
             %(description)s, %(confidence)s, %(source)s
         )
         RETURNING id;
@@ -269,6 +324,9 @@ def save_income(message_id: int, income: dict, user_id: int) -> int:
     income.setdefault("source", "manual")
     with get_connection() as conn:
         with conn.cursor() as cur:
+            category = _resolve_category(cur, user_id, "income", income.get("category"))
+            income["category_id"] = category["id"]
+            income["category"] = category["name"]
             cur.execute(query, income)
             row_id = cur.fetchone()["id"]
             conn.commit()
@@ -277,15 +335,17 @@ def save_income(message_id: int, income: dict, user_id: int) -> int:
 
 
 def get_expenses(user_id: int, min_date: str, max_date: str) -> list[dict]:
-    """Return all non-deleted expenses for a user within the date range (inclusive)."""
+    """Return all non-deleted expenses for a user within the date range (inclusive).
+    `category` is the category's current name, so renames show up in past reports."""
     query = """
-        SELECT amount, currency, category, expense_date,
-               payment_method, merchant, description, source
-        FROM expenses
-        WHERE user_id = %(user_id)s
-          AND deleted_at IS NULL
-          AND expense_date BETWEEN %(min_date)s AND %(max_date)s
-        ORDER BY expense_date, category;
+        SELECT e.amount, e.currency, c.name AS category, e.expense_date,
+               e.payment_method, e.merchant, e.description, e.source
+        FROM expenses e
+        JOIN categories c ON c.id = e.category_id
+        WHERE e.user_id = %(user_id)s
+          AND e.deleted_at IS NULL
+          AND e.expense_date BETWEEN %(min_date)s AND %(max_date)s
+        ORDER BY e.expense_date, c.name;
     """
     with get_connection() as conn:
         with conn.cursor() as cur:

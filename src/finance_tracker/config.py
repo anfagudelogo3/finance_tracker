@@ -63,6 +63,12 @@ DEFAULT_EXPENSE_CATEGORIES = [
 DEFAULT_INCOME_CATEGORIES = [
     "salario", "freelance", "negocio", "inversion", "reembolso", "regalo", "otro",
 ]
+# Business profiles get their own fixed defaults (seeded by onboarding, Phase 6b)
+DEFAULT_BUSINESS_EXPENSE_CATEGORIES = [
+    "insumos", "nómina", "arriendo", "servicios públicos", "impuestos",
+    "marketing", "transporte", "mantenimiento", "otro",
+]
+DEFAULT_BUSINESS_INCOME_CATEGORIES = ["ventas", "servicios", "otro"]
 
 # Conversation memory window (how much recent history the chatbot sees)
 CONVERSATION_MAX_TURNS = 8          # cap on number of recent turns loaded

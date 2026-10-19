@@ -298,6 +298,9 @@ adds the details the router needs to classify that business's money correctly.
 
 - `industry` and `description` are required for `business`: they say what the business **sells**
   (income) and what it **pays for** (expenses), which is exactly what classification needs.
+  From Phase 6b, onboarding asks for these separately (`sells`, `main_costs`) and the router's
+  profile summary is built from them; `description` stays readable for profiles set before.
+- The profile `type` is **fixed** at the first onboarding (Phase 6 decision).
 - Loaded once per message in `handler.py` (new `database.get_user_prefs(user_id)`) and passed as
   a new `AgentRequest.profile` field, so every agent sees the same profile.
 - The router's system prompt gets a short, stable profile summary, e.g. *"Perfil: negocio —
@@ -327,8 +330,14 @@ Other keys that live next to `profile` in each `user_prefs` snapshot:
 
 ### 5.2 Users agent (`agents/users.py`)
 
+> **Phase 6 scope is final.** Every decision and its reasoning is in
+> [design/phase-6-users-onboarding.md](design/phase-6-users-onboarding.md). This section
+> summarizes it.
+
 A specialist like the other three (`handle(AgentRequest) -> AgentResponse`), reached through
-`delegate_to_users`. It's a separate agent rather than tools on the router because:
+`delegate_to_users`. It owns **the user and their settings**, never transactions: correcting an
+expense or income stays in the expense and income agents (Phase 8). It's a separate agent rather
+than tools on the router because:
 
 - Its tools would otherwise be sent with **every** router call, including the many plain
   expenses. As an agent, they only load when someone changes a setting.
@@ -339,52 +348,50 @@ A specialist like the other three (`handle(AgentRequest) -> AgentResponse`), rea
 
 **Capabilities**
 
-| Area | Actions | Stored in |
+| Area | Actions | Confirmation |
 |---|---|---|
-| Profile | view; switch `personal` ↔ `business`; edit business name, industry, description; set default currency | `user_prefs` (new row per change) |
-| Expense and income categories | list, add, rename, merge, deactivate, reactivate | `categories` table (per user, per `kind`) |
-| Report preferences | default period, grouping (category, payment method, merchant), display currency | `user_prefs` → `report`, read by `agents.reporting` |
-| Onboarding answers | interpret free-text answers into profile, currency and categories | `user_prefs`, `categories` |
-
-Categories and report preferences are fully customizable. Because `expense_agent`,
-`income_agent` and `reporting_agent` already load per-user data, a change takes effect on the
-next message.
+| Profile type | Fixed at the first onboarding; **not changeable** | — |
+| Business details | Edit name, industry, what it sells, main costs | No |
+| Main currency | Change (future records only) | Yes |
+| Categories (expense / income) | Add; rename (past records follow via `category_id`); rename onto an existing name = merge; deactivate (never delete); reactivate by re-adding | Yes for rename/merge/deactivate with records |
+| Help | "¿Qué puedes hacer?", how-to, list settings and categories | — |
+| Out of scope | Account/data deletion, budgets, language change | Polite decline |
 
 **Rules**
 
-- **Rename** updates the category on existing `expenses` / `incomes` rows in the same
-  transaction, because `category` is stored as text on each record. Otherwise reports would
-  split one category into two.
-- **Merge** moves all records from one category to another, then deactivates the source.
-- **Deactivate** (never hard delete) hides the category from extraction prompts; its records keep
-  the category and still show in reports.
-- **Destructive or wide changes need confirmation** (rename or merge with existing records,
-  deactivating a category in use, switching profile type). The agent asks, e.g. *"La categoría
-  'ropa' tiene 12 gastos. ¿La desactivo?"*, and applies the change on the next turn using the
-  conversation history.
-- Tools (`get_settings`, `update_profile`, `add_category`, `rename_category`, `merge_categories`,
-  `deactivate_category`, `reactivate_category`, `set_report_prefs`) get `user_id` from the
-  executor, never from the model, like every other tool.
+- **Destructive changes apply to the future; history stays.** Deactivated categories keep
+  showing in past reports; a currency change only sets the default for new records. A rename
+  is the exception by design: it relabels the same category everywhere.
+- Records reference categories by **`category_id`** (Phase 6a), so a rename is one row and a merge
+  re-points the records of the source category.
+- Every category change is logged in the append-only **`category_events`** table; preference
+  changes go through `database.append_user_prefs`.
+- A pending confirmation is valid only for the very next message; anything but "sí" cancels it.
+- Tools get `user_id` from the executor, never from the model, like every other tool.
 - Names are validated: no duplicates per `kind`, reasonable length, normalized casing.
+- **Spanish only** in this version.
 
 ### 5.3 Onboarding (`agents/onboarding.py`)
 
-The first-time questions are a **fixed, deterministic flow**, not an open-ended LLM chat. That
-keeps it predictable, cheap and testable.
+A **fixed, deterministic flow**, not an open-ended LLM chat, so it stays predictable, cheap and
+testable. State lives in the latest `user_prefs` snapshot (`onboarding`).
 
-- State lives in the latest `user_prefs` snapshot (`onboarding.step`); each step appends a row. The questions are fixed Spanish strings in
-  `config.py`:
-  1. ¿Usas la app para tus finanzas personales o para un negocio?
-  2. (business only) ¿Cómo se llama el negocio, de qué es y qué vende? ¿Cuáles son sus gastos principales?
-  3. ¿Cuál es tu moneda principal?
-  4. Te dejo estas categorías por defecto: … ¿Las mantienes o quieres cambiar alguna?
-- Only the **answers** go to the users agent to interpret ("tengo un restaurante de almuerzos"
-  → a business profile; "agrega insumos y nómina" → categories).
-- **Never blocking:** if the user sends a finance message mid-onboarding ("almuerzo 20000"), it's
-  processed normally and the pending question is repeated afterwards.
-- Skippable ("omitir", defaults to `personal`) and restartable ("configurar de nuevo").
-- **Existing users** get `{"type": "personal"}` and onboarding marked done; they aren't forced
-  through the questions.
+- **Blocking, on the very first message.** Nothing is recorded until onboarding is finished or
+  skipped, because the user may change the categories first. The first message is **held** and
+  offered back at the end (*"Antes de empezar me escribiste '…'. ¿Lo registro?"*), keeping its
+  original date. Only the first message is held.
+- **Flow:** welcome message → personal or business (+ name, industry, what it sells, main costs)
+  → main currency → expense categories (defaults or customize) → income categories (defaults or
+  customize).
+- **Answers:** text or voice notes. Closed questions use numbered options matched in code (no
+  LLM). Only open answers go to the LLM (business details, category customization).
+- `omitir` skips the current question (its default applies); `omitir todo` skips the rest.
+- A message mid-onboarding gets a short answer and the current question again. An abandoned
+  onboarding starts over from the beginning.
+- `reiniciar configuración` (the whole message) reruns it **without the profile question** and
+  saves a complete new snapshot (`source="onboarding_restart"`), so restarts can be counted.
+- Personal and business profiles get **different fixed default categories**.
+- No existing users to migrate: the database is rebuilt after Phase 6, so everyone onboards.
 
 ---
 
@@ -459,21 +466,23 @@ latency, tokens and cost per message.
 
 ### Phase 6 — Users agent + onboarding
 
-- New: `agents/users.py` (§5.2), `agents/onboarding.py` (§5.3); `delegate_to_users` added to the
-  router.
-- `database.py`: settings functions scoped by `user_id` (update prefs, add / rename / merge /
-  deactivate / reactivate category). Rename and merge update `expenses`/`incomes` rows in one
-  transaction.
-- `agents.reporting` reads the `report` key of the latest `user_prefs` row.
-- Existing users backfilled with `{"type": "personal"}` and onboarding marked done.
-- Every settings change goes through `database.append_user_prefs` (new row, `source="users_agent"` or `"onboarding"`), never an UPDATE.
-- **Evals:** the `users`-routed cases in `route_message.json` (skipped until this phase) plus a
-  users-agent dataset: message → expected settings change (tool + arguments), including
-  confirmation-required cases.
-- **Tests:** onboarding state machine (each step, skip, restart, finance message mid-flow);
-  rename/merge transactionality; confirmation before destructive changes.
-- **Exit:** a new user can complete onboarding as personal or business; categories and report
-  preferences can be changed from chat and take effect on the next message.
+Scope and decisions: [design/phase-6-users-onboarding.md](design/phase-6-users-onboarding.md).
+Delivered as three PRs:
+
+- **6a — Category ids (refactor, no behavior change).** `expenses.category_id` /
+  `incomes.category_id` referencing `categories(id)` replace the `category` text column (no
+  migration: the database is rebuilt from `scripts/setup_db.sql` after Phase 6). Reads join
+  `categories` for the name. New append-only `category_events` table. Business default
+  categories in `config.py`. Current tests and evals stay green.
+- **6b — Onboarding.** `agents/onboarding.py` state machine (§5.3); held first message;
+  `omitir` / `omitir todo` / `reiniciar configuración`; profile-based category seeding. Deterministic unit tests for every step.
+- **6c — Users agent.** `agents/users.py` (§5.2) on `run_tool_loop`; `delegate_to_users` in the
+  router; settings functions in `database.py` scoped by `user_id`; confirmation flow; help.
+  Enables the `skip:"phase-6"` cases in `route_message.json` and adds a users-agent dataset
+  (message → expected tool + arguments, including confirmation-required cases).
+- **Exit:** a new user can complete or skip onboarding as personal or business; categories,
+  currency and business details can be changed from chat and take effect on the next message;
+  renames show up in past reports, deactivated categories stay in them.
 
 ### Phase 7 — Guardrails hardening
 
@@ -535,8 +544,6 @@ latency, tokens and cost per message.
 - **Personal and business money in one account.** A business owner who also logs personal
   spending would get mixed reports. Solving it means tagging each record with which books it
   belongs to (e.g. a `ledger` column) and letting reports filter by it. Not planned yet.
-- **Category ids vs text.** `expenses.category` / `incomes.category` are plain text, so renames
-  update rows in place (§5.2). Switching to a `category_id` foreign key is cleaner but needs a
-  migration; revisit if renames or merges become frequent.
+- **Category ids vs text (decided: ids, Phase 6a).** Records reference `categories(id)`.
 - **Budgets** (the `budgets` table already exists) aren't covered by the users agent yet. They're
   a natural later addition to it.

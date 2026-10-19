@@ -5,6 +5,8 @@ import pytest
 from finance_tracker.storage.database import (
     save_message,
     save_expense,
+    save_income,
+    get_expenses,
     get_or_create_user,
     get_user_categories,
     save_turn,
@@ -62,6 +64,8 @@ class TestSaveExpense:
     @patch("finance_tracker.storage.database.get_connection")
     def test_saves_and_returns_id(self, mock_get_conn):
         mock_cursor = _mock_connection(mock_get_conn, 1)
+        # Category lookup → the user's 'comida' row, then INSERT RETURNING id
+        mock_cursor.fetchone.side_effect = [{"id": 3, "name": "comida"}, {"id": 1}]
 
         expense = {
             "amount": 32000,
@@ -77,7 +81,65 @@ class TestSaveExpense:
 
         assert result == 1
         assert expense["user_id"] == 7  # user_id injected into the row
-        mock_cursor.execute.assert_called_once()
+        assert expense["category_id"] == 3  # stored by id, not by name
+        insert_sql, params = mock_cursor.execute.call_args_list[-1].args
+        assert "category_id" in insert_sql and params["category_id"] == 3
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_unknown_category_falls_back_to_otro(self, mock_get_conn):
+        mock_cursor = _mock_connection(mock_get_conn)
+        mock_cursor.fetchone.side_effect = [{"id": 9, "name": "otro"}, {"id": 1}]
+        expense = {"amount": 5000, "category": "mascotas", "date": "2026-04-03",
+                   "payment_method": None, "merchant": None, "description": "x", "confidence": 0.5}
+
+        save_expense(message_id=1, expense=expense, user_id=7)
+
+        lookup_sql, lookup_params = mock_cursor.execute.call_args_list[0].args
+        assert "'otro'" in lookup_sql and lookup_params["user_id"] == 7
+        assert expense["category_id"] == 9
+        assert expense["category"] == "otro"  # the confirmation shows the stored name
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_missing_otro_is_created_and_logged(self, mock_get_conn):
+        mock_cursor = _mock_connection(mock_get_conn)
+        # lookup → nothing; INSERT category RETURNING; INSERT expense RETURNING
+        mock_cursor.fetchone.side_effect = [None, {"id": 11, "name": "otro"}, {"id": 1}]
+        expense = {"amount": 5000, "category": None, "date": "2026-04-03",
+                   "payment_method": None, "merchant": None, "description": "x", "confidence": 0.5}
+
+        save_expense(message_id=1, expense=expense, user_id=7)
+
+        sqls = [c.args[0] for c in mock_cursor.execute.call_args_list]
+        assert any("INSERT INTO categories" in q for q in sqls)
+        assert any("INSERT INTO category_events" in q for q in sqls)
+        assert expense["category_id"] == 11
+
+
+class TestSaveIncome:
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_resolves_income_category(self, mock_get_conn):
+        mock_cursor = _mock_connection(mock_get_conn)
+        mock_cursor.fetchone.side_effect = [{"id": 21, "name": "salario"}, {"id": 5}]
+        income = {"amount": 2000000, "category": "salario", "date": "2026-04-03",
+                  "description": "pago", "confidence": 1.0}
+
+        assert save_income(message_id=1, income=income, user_id=7) == 5
+        _, lookup_params = mock_cursor.execute.call_args_list[0].args
+        assert lookup_params["kind"] == "income"
+        assert income["category_id"] == 21
+
+
+class TestGetExpenses:
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_reads_current_category_name_through_join(self, mock_get_conn):
+        mock_cursor = _mock_connection(mock_get_conn)
+        mock_cursor.fetchall.return_value = [{"amount": 1, "category": "alimentación"}]
+
+        rows = get_expenses(7, "2026-04-01", "2026-04-30")
+
+        sql = mock_cursor.execute.call_args.args[0]
+        assert "JOIN categories" in sql and "c.name AS category" in sql
+        assert rows == [{"amount": 1, "category": "alimentación"}]
 
 
 class TestGetOrCreateUser:
@@ -88,8 +150,10 @@ class TestGetOrCreateUser:
         result = get_or_create_user("+573001234567")
 
         assert result == 42
-        # New user → categories seeded via executemany
+        # New user → categories seeded via executemany, each logged as an 'add' event
         mock_cursor.executemany.assert_called_once()
+        sqls = [c.args[0] for c in mock_cursor.execute.call_args_list]
+        assert any("INSERT INTO category_events" in q and "'seed'" in q for q in sqls)
 
     @patch("finance_tracker.storage.database.get_connection")
     def test_returns_existing_user_without_seeding(self, mock_get_conn):

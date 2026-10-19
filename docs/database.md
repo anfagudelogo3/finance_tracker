@@ -11,11 +11,11 @@ current agent rollout plan (identity/categories/conversation-turn design here is
 by it; only the agent architecture built on top of this schema changed).
 
 ```
-users ──┬── messages ──── expenses (FK message_id, user_id)
-        │             └── incomes  (FK message_id, user_id)
+users ──┬── messages ──── expenses (FK message_id, user_id, category_id)
+        │             └── incomes  (FK message_id, user_id, category_id)
         ├── user_prefs (append-only, latest row wins)
         ├── conversation_turns
-        ├── categories
+        ├── categories ── category_events (append-only history)
         └── budgets
 ```
 
@@ -48,7 +48,7 @@ user as `{"profile": {"type": "personal"}}`.
 | `user_id` | `INTEGER NOT NULL` FK → `users(id)` | `ON DELETE CASCADE` |
 | `prefs` | `JSONB NOT NULL` | Full snapshot after the change |
 | `changes` | `JSONB` | Only the keys that changed in this row |
-| `source` | `VARCHAR(20) NOT NULL DEFAULT 'manual'` | `onboarding` \| `users_agent` \| `manual` \| `migration` |
+| `source` | `VARCHAR(20) NOT NULL DEFAULT 'manual'` | `onboarding` \| `onboarding_restart` \| `users_agent` \| `manual` |
 | `created_at` | `TIMESTAMPTZ` | When the change was made |
 
 Keys in `prefs` (see [agent-roadmap.md](agent-roadmap.md) §5.1):
@@ -123,6 +123,30 @@ with the defaults from `config.py` when a user is created.
 The active expense categories are injected into the extraction prompts per request by
 [`database.get_user_categories`](../src/finance_tracker/storage/database.py).
 
+`expenses` and `incomes` reference a category by **`category_id`**, never by name (Phase 6a), so
+renaming a category is a single-row change and past records show the new name. The agents still
+pick a category by name; `save_expense` / `save_income` resolve it to the user's id
+(case-insensitive), falling back to the user's `otro` (created if missing). Categories are
+never deleted, only deactivated (`active = FALSE`), so old records keep theirs.
+
+## `category_events` (append-only category history)
+
+One row per category change; never updated or deleted. `categories` stays the source of truth;
+this table answers "how many times did this user change categories?" and "what was this
+category called before?". Seeding a new user writes one `add` event per default category.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `SERIAL` PK | |
+| `user_id` | `INTEGER NOT NULL` | FK → `users(id)` `ON DELETE CASCADE` |
+| `category_id` | `INTEGER NOT NULL` | FK → `categories(id)` `ON DELETE CASCADE` |
+| `kind` | `VARCHAR(16) NOT NULL` | `expense` or `income` |
+| `action` | `VARCHAR(20) NOT NULL` | `add`, `rename`, `merge`, `deactivate`, `reactivate` |
+| `old_name` / `new_name` | `VARCHAR(50)` | Before / after the change |
+| `records_affected` | `INTEGER` | Records re-pointed by a merge |
+| `source` | `VARCHAR(20) NOT NULL` | `seed`, `onboarding`, `users_agent` |
+| `created_at` | `TIMESTAMPTZ` | |
+
 ## `expenses`
 
 One row per parsed expense.
@@ -134,7 +158,7 @@ One row per parsed expense.
 | `message_id` | `INTEGER NOT NULL` | FK → `messages(id)` `ON DELETE CASCADE` |
 | `amount` | `NUMERIC(12,2) NOT NULL` | |
 | `currency` | `VARCHAR(10) NOT NULL DEFAULT 'COP'` | |
-| `category` | `VARCHAR(50) NOT NULL` | |
+| `category_id` | `INTEGER NOT NULL` | FK → `categories(id)`; the name is read through it |
 | `expense_date` | `DATE NOT NULL DEFAULT CURRENT_DATE` | |
 | `payment_method` | `VARCHAR(50)` | Nullable |
 | `merchant` | `VARCHAR(100)` | Nullable |
@@ -166,7 +190,7 @@ Mirrors `expenses` for money coming in.
 | `message_id` | `INTEGER` | FK → `messages(id)` `ON DELETE SET NULL` |
 | `amount` | `NUMERIC(12,2) NOT NULL` | |
 | `currency` | `VARCHAR(10) NOT NULL DEFAULT 'COP'` | |
-| `category` | `VARCHAR(50) NOT NULL` | |
+| `category_id` | `INTEGER NOT NULL` | FK → `categories(id)` |
 | `income_date` | `DATE NOT NULL DEFAULT CURRENT_DATE` | |
 | `source` | `VARCHAR(20) NOT NULL DEFAULT 'manual'` | `manual`, `gmail`, `bank` (future) |
 | `description` | `TEXT` | |
@@ -198,11 +222,13 @@ Per-currency budgets, either global or scoped to a category.
 | `idx_user_prefs_latest` | `user_prefs(user_id, created_at DESC, id DESC)` — the latest-row lookup |
 | `idx_turns_user_created` | `conversation_turns(user_id, created_at)` |
 | `idx_categories_user` | `categories(user_id, kind)` |
+| `idx_category_events_user` | `category_events(user_id, created_at)` |
 | `idx_expenses_user` | `expenses(user_id)` |
 | `idx_expenses_message_id` | `expenses(message_id)` |
 | `idx_expenses_date` | `expenses(expense_date)` |
 | `idx_incomes_user` | `incomes(user_id)` |
 | `idx_incomes_date` | `incomes(income_date)` |
+| `idx_expenses_category` / `idx_incomes_category` | `category_id` |
 | `idx_budgets_user` | `budgets(user_id)` |
 
 ## Reset
@@ -210,19 +236,21 @@ Per-currency budgets, either global or scoped to a category.
 Existing data is disposable in this stage. The top of
 [`scripts/setup_db.sql`](../scripts/setup_db.sql) has a commented **RESET** block —
 uncomment the `DROP TABLE … CASCADE` lines and run once to wipe, then run the `CREATE`
-statements.
+statements. Phase 6 changes the schema without migrations: the database is rebuilt this way
+once Phase 6 is complete.
 
 ## Common query
 
 Reports and Excel exports read through [`database.get_expenses`](../src/finance_tracker/storage/database.py),
-now scoped by `user_id` and excluding soft-deleted rows:
+scoped by `user_id`, excluding soft-deleted rows, with the category's current name:
 
 ```sql
-SELECT amount, currency, category, expense_date,
-       payment_method, merchant, description, source
-FROM expenses
-WHERE user_id = :user_id
-  AND deleted_at IS NULL
-  AND expense_date BETWEEN :min_date AND :max_date
-ORDER BY expense_date, category;
+SELECT e.amount, e.currency, c.name AS category, e.expense_date,
+       e.payment_method, e.merchant, e.description, e.source
+FROM expenses e
+JOIN categories c ON c.id = e.category_id
+WHERE e.user_id = :user_id
+  AND e.deleted_at IS NULL
+  AND e.expense_date BETWEEN :min_date AND :max_date
+ORDER BY e.expense_date, c.name;
 ```
