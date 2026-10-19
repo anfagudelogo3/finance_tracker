@@ -2,7 +2,7 @@ import logging
 from contextlib import contextmanager
 
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import Json, RealDictCursor
 
 from finance_tracker.config import (
     DATABASE_URL,
@@ -84,6 +84,74 @@ def get_user_categories(user_id: int, kind: str = "expense") -> list[str]:
     if names:
         return names
     return DEFAULT_INCOME_CATEGORIES if kind == "income" else DEFAULT_EXPENSE_CATEGORIES
+
+
+# ── Preferences (append-only history) ────────────────────────────────────────────
+#
+# user_prefs is never updated in place: every change inserts a new row holding the full
+# preferences snapshot, and the current preferences are the user's latest row. The old
+# users.prefs column is no longer read.
+
+
+def get_user_prefs(user_id: int) -> dict:
+    """Return the user's current preferences — the latest user_prefs row (profile, and
+    later currency / report settings). Empty dict when the user has never set any."""
+    query = """
+        SELECT prefs FROM user_prefs
+        WHERE user_id = %(user_id)s
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1;
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, {"user_id": user_id})
+            row = cur.fetchone()
+    return (row["prefs"] if row else None) or {}
+
+
+def append_user_prefs(
+    user_id: int, changes: dict, source: str = "manual"
+) -> int:
+    """Record a preferences change as a new user_prefs row and return its id.
+
+    The new row's snapshot is the latest preferences with `changes` merged on top
+    (top-level keys replaced), read and written in one transaction so two concurrent
+    changes can't drop each other's keys.
+    """
+    latest = """
+        SELECT prefs FROM user_prefs
+        WHERE user_id = %(user_id)s
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1;
+    """
+    insert = """
+        INSERT INTO user_prefs (user_id, prefs, changes, source)
+        VALUES (%(user_id)s, %(prefs)s, %(changes)s, %(source)s)
+        RETURNING id;
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # Lock the user row so concurrent appends for the same user serialize
+            cur.execute("SELECT id FROM users WHERE id = %(user_id)s FOR UPDATE;", {"user_id": user_id})
+            cur.execute(latest, {"user_id": user_id})
+            row = cur.fetchone()
+            prefs = {**((row["prefs"] if row else None) or {}), **changes}
+            cur.execute(
+                insert,
+                {
+                    "user_id": user_id,
+                    "prefs": Json(prefs),
+                    "changes": Json(changes),
+                    "source": source,
+                },
+            )
+            prefs_id = cur.fetchone()["id"]
+            conn.commit()
+    logger.info(
+        "Appended prefs id=%d for user=%d (source=%s, keys=%s)",
+        prefs_id, user_id, source, sorted(changes),
+    )
+    return prefs_id
 
 
 # ── Conversation memory ──────────────────────────────────────────────────────────

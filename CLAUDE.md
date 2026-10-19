@@ -43,11 +43,11 @@ Single Lambda, one entry point, straight-line pipeline. `lambda/handler.py` (cop
 
 **Intent routing** — first match wins:
 1. `fast_paths.is_excel_request` — keyword match → build `.xlsx`, upload to S3, send presigned link
-2. `fast_paths.is_report_request` — exact substring match, then `difflib` fuzzy word match at cutoff `0.8` → `orchestrator.handle_message` → `agents.reporting`
+2. `fast_paths.fast_route(...) == "reporting"` — the narrowed report fast path → `orchestrator.handle_message` → `agents.reporting`
 3. Image → `legacy.openai_parser.parse_expense_from_image` (OpenAI vision, not yet migrated)
-4. Text / audio (audio → Whisper `transcribe_audio` first) → `orchestrator.handle_message`: report keywords → `agents.reporting`, income keywords → `agents.incomes`, else `agents.expenses` (Claude)
+4. Text / audio (audio → Whisper `transcribe_audio` first) → `orchestrator.handle_message`: `fast_paths.fast_route` picks `agents.expenses` / `incomes` / `reporting` for free when the intent is unambiguous; everything else goes to `routing/router_agent.py` (Claude Haiku 5.5), which delegates to one or more agents as tools, asks a clarifying question, or declines
 
-The planned router agent that replaces keyword-only dispatch is in `docs/agent-roadmap.md`.
+**Hybrid routing rules:** `fast_route` only fires for `personal` profiles, never when the last assistant turn was a question, and never on multi-intent or suspicious text; it must never be wrong on `evals/datasets/route_message.json` (enforced by `tests/routing/test_fast_paths.py`). The router's reply is assembled in code from the specialists' `reply_text`s — the router never writes amounts itself. Its loop (`core/agent_loop.py`) stops on `stop_reason == "end_turn"`; `ROUTER_MAX_ITERATIONS` and `AGENT_LOOP_TIMEOUT_SECONDS` are safeguards only. Design: `docs/agent-roadmap.md` §4.
 
 Because Excel is checked first, "exportame el resumen" is an Excel request, not a report.
 
@@ -63,8 +63,8 @@ Because Excel is checked first, "exportame el resumen" is an Excel request, not 
 |------|----------------|
 | `handler.py` | Lambda handler, pipeline orchestration, branch selection |
 | `config.py` | All env vars and tunable constants (models, cutoffs, reply strings) |
-| `core/` | Shared contracts and helpers: `agent_types.py` (`AgentRequest`/`AgentResponse`), `claude_client.py`, `confidence.py`, `text.py` |
-| `routing/` | `fast_paths.py` (all keyword checks: excel / report / income), `orchestrator.py` (dispatch to agents) |
+| `core/` | Shared contracts and helpers: `agent_types.py` (`AgentRequest`/`AgentResponse`), `agent_loop.py` (tool-use loop), `claude_client.py`, `confidence.py`, `text.py` |
+| `routing/` | `fast_paths.py` (all keyword checks + `fast_route`), `orchestrator.py` (fast path, else router), `router_agent.py` (Claude router, agents as tools) |
 | `agents/` | Specialists, each `handle(AgentRequest) -> AgentResponse`: `expenses.py`, `incomes.py`, `reporting.py` (+ `report_format.py`) |
 | `channels/whatsapp/` | `webhook.py` (Twilio HMAC verification, payload → message dict), `sender.py` (outbound messages/documents, confirmation formatting) |
 | `storage/` | `database.py` (psycopg2), `media.py` (Twilio media → S3 `incoming/whatsapp/{prefix}/{phone}/{sid}.{ext}`), `excel.py` (`.xlsx` + presigned URLs) |
@@ -101,7 +101,9 @@ Evaluated today: the legacy `parse_expense` / `parse_report_request`, the Claude
 
 `scripts/setup_db.sql` is idempotent (`CREATE TABLE IF NOT EXISTS` + `ADD COLUMN IF NOT EXISTS` migrations at the bottom). Adding a column means: append an `ALTER TABLE ... IF NOT EXISTS` there, update `database.py`, and update `docs/database.md`.
 
-`messages` (id, whatsapp_message_id UNIQUE, phone_number, raw_text, transcript, created_at) → `expenses` (message_id FK, amount, currency, category, expense_date, payment_method, merchant, description, confidence, source, created_at).
+`users` → `messages` (whatsapp_message_id UNIQUE) → `expenses` / `incomes`; plus `conversation_turns`, `categories`, `budgets`. Full schema in `docs/database.md`.
+
+**Preferences are append-only:** `user_prefs` gets a new row (full snapshot + changed keys + `created_at`) on every change and is never UPDATEd; every read takes the user's latest row (`database.get_user_prefs`). Write only through `database.append_user_prefs`. `users.prefs` is deprecated and not read.
 
 ## Docs
 

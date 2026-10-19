@@ -144,8 +144,24 @@ out of the run). Today 8 users-agent cases skip until Phase 6 and 1 correction c
 runner reports overall, per-profile (`profile:personal`, `profile:business`) and per-tag
 accuracy, `no_false_decline` (a finance message that got
 refused is a lost record), and, for routers that report `via: "fast_path"`, fast-path precision
-and coverage. Today it runs only the Phase 4 keyword baseline, which needs no API calls and has
-no thresholds. Thresholds land with the Phase 5 router. See
+and coverage. It runs three sections:
+
+| Section | What it scores | API calls |
+|---|---|---|
+| keyword baseline (Phase 4) | the old keyword-only routing — the "before" number | none |
+| router_agent alone | every case through the live Claude router (`routing/router_agent.py`), specialists stubbed | ~2 Haiku 5.5 calls per case |
+| hybrid (production) | `fast_route` first, the router for the rest — what `orchestrator.handle_message` does | router calls only for the cases `fast_route` leaves |
+
+The router sections need `ANTHROPIC_API_KEY`. To run only the routing evals (no OpenAI key
+needed):
+
+```bash
+uv run python -m evals.run --only routing
+uv run python -m evals.run --only routing --check   # exit 1 if a routing metric is under threshold
+```
+
+Thresholds for `router_agent` and `hybrid_routing` (in `THRESHOLDS`, `evals/run.py`) are set
+with headroom below the first live runs (100% twice, n=55); `fast_path_precision` must stay at 100%. See
 [agent-roadmap.md](agent-roadmap.md) §4.6 for the baseline numbers.
 
 #### Adding a new test case

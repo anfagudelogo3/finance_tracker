@@ -17,3 +17,25 @@ _TEST_ENV = {
 
 for key, value in _TEST_ENV.items():
     os.environ.setdefault(key, value)
+
+
+import pytest  # noqa: E402  (env vars above must be set before any finance_tracker import)
+
+
+@pytest.fixture(autouse=True)
+def _no_live_llm_calls(monkeypatch):
+    """Fail loudly if a test reaches a real Claude/OpenAI client.
+
+    Tests mock clients by patching the module attribute (e.g.
+    "finance_tracker.agents.expenses.client"), which replaces the reference and
+    bypasses this guard — so only an unmocked call path ever hits it.
+    """
+    from finance_tracker.core import claude_client
+    from finance_tracker.legacy import openai_parser
+
+    def _blocked(*args, **kwargs):
+        raise AssertionError("Test made a live LLM API call — mock the client")
+
+    monkeypatch.setattr(claude_client.client.messages, "create", _blocked)
+    monkeypatch.setattr(openai_parser.client.chat.completions, "create", _blocked)
+    monkeypatch.setattr(openai_parser.client.audio.transcriptions, "create", _blocked)

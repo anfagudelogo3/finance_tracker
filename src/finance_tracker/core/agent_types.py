@@ -1,4 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from finance_tracker.config import DEFAULT_PROFILE
 
 
 @dataclass
@@ -7,7 +9,9 @@ class AgentRequest:
 
     Reuses existing dict shapes rather than inventing parallel types: `media`
     matches media.store_all_media()'s output, `conversation` matches
-    database.load_recent_turns()'s {role, content} rows.
+    database.load_recent_turns()'s {role, content} rows, and `profile` is
+    users.prefs["profile"] ({"type": "personal"} or {"type": "business",
+    "business": {...}} — see docs/agent-roadmap.md §5.1).
 
     No `categories` field: which category `kind` (expense/income/...) applies depends
     on which agent ends up handling the request, which orchestrator.py only decides
@@ -23,6 +27,7 @@ class AgentRequest:
     message_type: str  # "text" | "audio" | "image"
     now: str  # ISO datetime, America/Bogota
     conversation: list[dict]
+    profile: dict = field(default_factory=lambda: dict(DEFAULT_PROFILE))
 
 
 @dataclass

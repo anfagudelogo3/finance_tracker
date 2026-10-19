@@ -10,14 +10,20 @@ from zoneinfo import ZoneInfo
 from finance_tracker.observability.tracing import setup_tracing
 setup_tracing()
 
-from finance_tracker.config import ALLOWED_PHONE_NUMBERS, WEBHOOK_URL, MSG_ERROR, MSG_EMPTY_EXPENSE
+from finance_tracker.config import (
+    ALLOWED_PHONE_NUMBERS,
+    WEBHOOK_URL,
+    MSG_ERROR,
+    MSG_EMPTY_EXPENSE,
+    DEFAULT_PROFILE,
+)
 from finance_tracker.channels.whatsapp.webhook import verify_signature, extract_message
 from finance_tracker.legacy.openai_parser import (
     parse_expense_from_image,
     transcribe_audio,
     parse_report_request
 )
-from finance_tracker.routing.fast_paths import is_excel_request, is_report_request
+from finance_tracker.routing.fast_paths import is_excel_request, fast_route
 from finance_tracker.core.agent_types import AgentRequest
 from finance_tracker.routing import orchestrator
 from finance_tracker.storage.excel import create_excel_bytes, upload_and_sign
@@ -30,6 +36,7 @@ from finance_tracker.storage.database import (
     get_user_categories,
     save_turn,
     load_recent_turns,
+    get_user_prefs,
 )
 from finance_tracker.storage.media import store_all_media
 from finance_tracker.channels.whatsapp.sender import send_message, send_document, format_confirmation
@@ -81,7 +88,7 @@ def _parse_form_body(event: dict) -> dict:
 
 
 def _dispatch_and_reply(
-    user_id, message, msg_type, agent_text, message_id, now, conversation
+    user_id, message, msg_type, agent_text, message_id, now, conversation, profile
 ):
     """Build an AgentRequest, dispatch through the orchestrator, and send the reply.
 
@@ -97,6 +104,7 @@ def _dispatch_and_reply(
         message_type=msg_type,
         now=now,
         conversation=conversation,
+        profile=profile,
     )
     agent_response = orchestrator.handle_message(agent_request)
 
@@ -153,6 +161,9 @@ def _handle_message(event):
         # naturally excludes the message currently being processed.
         conversation = load_recent_turns(user_id)
 
+        # Profile drives routing (business messages always go to the router)
+        profile = get_user_prefs(user_id).get("profile") or dict(DEFAULT_PROFILE)
+
         # Record the inbound turn for short-term conversation memory
         save_turn(user_id, "user", message["text"] or f"[{_get_message_type(message)}]")
 
@@ -188,8 +199,9 @@ def _handle_message(event):
             save_turn(user_id, "assistant", f"[excel] {filename}")
             return {"statusCode": 200, "body": ""}
 
-        # Report branch — routes through the orchestrator to agents.reporting
-        if is_report_request(message["text"]):
+        # Report branch — only the narrowed fast path (personal profile, single intent);
+        # anything else that looks like a report reaches the router via the orchestrator
+        if fast_route(message["text"], profile, conversation) == "reporting":
             logger.info("Report request detected from %s", message["phone"])
             return _dispatch_and_reply(
                 user_id,
@@ -199,6 +211,7 @@ def _handle_message(event):
                 message_id,
                 now,
                 conversation,
+                profile,
             )
 
         # Image expense branch — unchanged, still the old OpenAI vision path
@@ -244,7 +257,7 @@ def _handle_message(event):
             agent_text = message["text"]
 
         return _dispatch_and_reply(
-            user_id, message, msg_type, agent_text, message_id, now, conversation
+            user_id, message, msg_type, agent_text, message_id, now, conversation, profile
         )
 
     except Exception:

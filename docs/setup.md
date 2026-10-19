@@ -36,7 +36,8 @@ fail to start if any is missing:
 | `TWILIO_AUTH_TOKEN` | Twilio Auth Token (also used to download media and verify signatures) | `your_twilio_auth_token` |
 | `TWILIO_WHATSAPP_NUMBER` | Sender number, with the `whatsapp:` prefix | `whatsapp:+14155238886` |
 | `ALLOWED_PHONE_NUMBERS` | Comma-separated allowlist of senders (E.164, with `+`) | `+573001234567,+573009876543` |
-| `OPENAI_API_KEY` | OpenAI API key | `sk-…` |
+| `ANTHROPIC_API_KEY` | Anthropic API key — the Claude router and the expense / income / reporting agents | `sk-ant-…` |
+| `OPENAI_API_KEY` | OpenAI API key — Whisper transcription, image expenses, Excel date parsing | `sk-…` |
 | `DATABASE_URL` | PostgreSQL connection string (`sslmode=require` for Neon) | `postgresql://user:pass@ep-xxx.neon.tech/db?sslmode=require` |
 | `S3_BUCKET_NAME` | Bucket for inbound media and generated Excel files | `finance-tracker-dev` |
 | `WEBHOOK_URL` | The exact public URL configured in Twilio; used for signature validation | `https://xxx.lambda-url.us-east-2.on.aws/` |

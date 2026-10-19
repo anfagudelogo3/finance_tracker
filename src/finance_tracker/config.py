@@ -30,6 +30,19 @@ OPENAI_AUDIO_LANGUAGE = "es"
 # Claude models — expense agent (text/audio only; image expense stays on OpenAI vision)
 CLAUDE_EXTRACTION_MODEL = "claude-haiku-4-5-20251001"
 
+# Router agent (Phase 5) — runs only when no keyword fast path matched. Haiku 5.5 at low
+# effort: cheapest current tier, thinks before choosing tools (tool_choice=auto).
+CLAUDE_ROUTER_MODEL = "claude-haiku-5-5"
+ROUTER_EFFORT = "low"
+ROUTER_MAX_TOKENS = 2048          # thinking counts toward this on Haiku 5.5
+ROUTER_MAX_ITERATIONS = 6         # safeguard only — the loop normally ends on end_turn
+ROUTER_MAX_DELEGATIONS = 3        # specialist calls allowed per message
+AGENT_LOOP_TIMEOUT_SECONDS = 12   # stays under Twilio's 15 s webhook timeout
+ROUTER_MAX_INPUT_CHARS = 1000     # longer messages are truncated before routing
+
+# User profile (users.prefs.profile) used when a user has none set
+DEFAULT_PROFILE = {"type": "personal"}
+
 # S3
 PRESIGNED_URL_EXPIRY_SECONDS = 60
 
@@ -53,3 +66,13 @@ CONVERSATION_WINDOW_MINUTES = 30    # only turns within this window count as "re
 MSG_ERROR = "Ocurrió un error inesperado. Por favor intenta de nuevo."
 MSG_EMPTY_EXPENSE = "No entendí ese mensaje. Intenta describir el gasto con monto y categoría."
 MSG_EMPTY_INCOME = "No entendí ese mensaje. Intenta describir el ingreso con monto y categoría."
+MSG_OUT_OF_SCOPE = (
+    "Solo puedo ayudarte con tus finanzas: registrar gastos e ingresos y darte resúmenes. "
+    "¿Qué quieres registrar o consultar?"
+)
+MSG_ROUTER_EMPTY = (
+    "¿En qué te ayudo? Puedes registrar un gasto (\"almuerzo 20000\"), un ingreso "
+    "(\"me pagaron 2000000\") o pedir un resumen (\"cuánto gasté este mes\")."
+)
+MSG_DELEGATION_FAILED = "⚠️ No pude procesar: {task}"
+MSG_PARTIAL_TIMEOUT = "⚠️ No alcancé a terminar todo. Revisa lo registrado e intenta de nuevo con lo que faltó."

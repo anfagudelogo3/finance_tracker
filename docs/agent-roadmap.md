@@ -66,7 +66,7 @@ the `anthropic` SDK the project already uses.
 | Routing order | **Hybrid:** deterministic keyword fast paths run first (personal profiles only); the LLM router handles everything they don't resolve |
 | Framework | Agents-as-tools on the `anthropic` SDK (no Agent SDK in the request path) |
 | Specialists | Expenses, incomes, reporting, **users** |
-| User profile | `personal` or `business` (with business details), stored in `users.prefs`; routing and classification depend on it (§5.1) |
+| User profile | `personal` or `business` (with business details), stored in the append-only `user_prefs` history (latest row wins); routing and classification depend on it (§5.1) |
 | Onboarding | Fixed, non-blocking question flow on first use; answers interpreted by the users agent (§5.3) |
 | Ambiguity | Ask, don't assume (§4.5) |
 
@@ -273,8 +273,12 @@ path to catch errors.
 
 ### 5.1 Profile class
 
-Every user has exactly one profile, stored under `users.prefs.profile` (the `prefs` JSONB column
-already exists, so no schema change). `type` is `personal` or `business`. A business profile
+Every user has exactly one current profile, stored under `prefs.profile` in the **append-only
+`user_prefs` table**: every change inserts a new row with the full preferences snapshot and the
+datetime, rows are never updated, and every read uses the user's latest row
+(`database.get_user_prefs` / `database.append_user_prefs`, see
+[database.md](database.md#user_prefs-append-only-preference-history)). The old `users.prefs`
+column is deprecated and no longer read. `type` is `personal` or `business`. A business profile
 adds the details the router needs to classify that business's money correctly.
 
 ```jsonc
@@ -310,7 +314,7 @@ adds the details the router needs to classify that business's money correctly.
 - **Not covered:** one account tracking both personal and business money. That needs tagging each
   record with which books it belongs to (§8).
 
-Other keys that live next to `profile` in `users.prefs`:
+Other keys that live next to `profile` in each `user_prefs` snapshot:
 
 ```jsonc
 {
@@ -337,10 +341,10 @@ A specialist like the other three (`handle(AgentRequest) -> AgentResponse`), rea
 
 | Area | Actions | Stored in |
 |---|---|---|
-| Profile | view; switch `personal` ↔ `business`; edit business name, industry, description; set default currency | `users.prefs` |
+| Profile | view; switch `personal` ↔ `business`; edit business name, industry, description; set default currency | `user_prefs` (new row per change) |
 | Expense and income categories | list, add, rename, merge, deactivate, reactivate | `categories` table (per user, per `kind`) |
-| Report preferences | default period, grouping (category, payment method, merchant), display currency | `users.prefs.report`, read by `reporting_agent` |
-| Onboarding answers | interpret free-text answers into profile, currency and categories | `users.prefs`, `categories` |
+| Report preferences | default period, grouping (category, payment method, merchant), display currency | `user_prefs` → `report`, read by `agents.reporting` |
+| Onboarding answers | interpret free-text answers into profile, currency and categories | `user_prefs`, `categories` |
 
 Categories and report preferences are fully customizable. Because `expense_agent`,
 `income_agent` and `reporting_agent` already load per-user data, a change takes effect on the
@@ -368,7 +372,7 @@ next message.
 The first-time questions are a **fixed, deterministic flow**, not an open-ended LLM chat. That
 keeps it predictable, cheap and testable.
 
-- State lives in `users.prefs.onboarding.step`. The questions are fixed Spanish strings in
+- State lives in the latest `user_prefs` snapshot (`onboarding.step`); each step appends a row. The questions are fixed Spanish strings in
   `config.py`:
   1. ¿Usas la app para tus finanzas personales o para un negocio?
   2. (business only) ¿Cómo se llama el negocio, de qué es y qué vende? ¿Cuáles son sus gastos principales?
@@ -428,6 +432,31 @@ latency, tokens and cost per message.
 - **Exit:** routing eval above threshold for both profiles; existing expense/income/report evals
   unchanged; Phoenix shows router → specialist spans.
 
+**As built** (`feature/phase-5-router-agent`; report: [phase-5-router-agent.md](design/phase-reports/phase-5-router-agent.md)). Live eval: router alone and hybrid both **100%** on 55 cases, two runs; router p50 2.5 s. Phoenix review pending.
+
+- **Router model:** `claude-haiku-5-5` at `effort: "low"` (`ROUTER_MAX_TOKENS=2048`, since thinking
+  counts toward it). The specialists stay on `claude-haiku-4-5-20251001` with forced tool use.
+- **Fast paths:** one function, `fast_paths.fast_route(text, profile, conversation)`, used by both
+  `handler.py`'s report branch and the orchestrator. It fires only for `personal` profiles, never
+  when the last assistant turn was a question, and never on text with a conjunction, `", "`,
+  `;`, a destructive or injection word, or a phone number. Report: phrase match, or a single
+  report word in a message of ≤3 words (no fuzzy matching). Income: income phrase + an amount.
+  Expense: an amount + a clear expense word in ≤7 words. On `route_message.json` it fires on
+  9 of 55 cases and is never wrong; `tests/routing/test_fast_paths.py` enforces that.
+- **Reply assembly in code:** specialist `reply_text`s are sent verbatim, followed by the
+  clarifying question; `decline` sends `MSG_OUT_OF_SCOPE`; the router's own text is used only
+  when no tool ran (small talk). A tripped safeguard lists what was done plus
+  `MSG_PARTIAL_TIMEOUT`, or sends `MSG_ERROR` when nothing was done.
+- **Input:** conversation and message go in one user turn as tagged data
+  (`<conversation>…</conversation><message>…</message>`), capped at `ROUTER_MAX_INPUT_CHARS`.
+- **Limits:** `ROUTER_MAX_ITERATIONS=6`, `ROUTER_MAX_DELEGATIONS=3`,
+  `AGENT_LOOP_TIMEOUT_SECONDS=12`.
+- **Preferences:** profiles are read from the append-only `user_prefs` table (latest row,
+  §5.1); `database.append_user_prefs` is the only writer, ready for Phase 6.
+- **Evals:** `uv run python -m evals.run --only routing` runs the keyword baseline, the router
+  alone and the hybrid (production) path with only `ANTHROPIC_API_KEY` set.
+- **Tests:** `tests/conftest.py` now fails any test that reaches a real Claude or OpenAI client.
+
 ### Phase 6 — Users agent + onboarding
 
 - New: `agents/users.py` (§5.2), `agents/onboarding.py` (§5.3); `delegate_to_users` added to the
@@ -435,9 +464,9 @@ latency, tokens and cost per message.
 - `database.py`: settings functions scoped by `user_id` (update prefs, add / rename / merge /
   deactivate / reactivate category). Rename and merge update `expenses`/`incomes` rows in one
   transaction.
-- `reporting_agent` reads `users.prefs.report`.
+- `agents.reporting` reads the `report` key of the latest `user_prefs` row.
 - Existing users backfilled with `{"type": "personal"}` and onboarding marked done.
-- `docs/database.md` documents the `users.prefs` keys.
+- Every settings change goes through `database.append_user_prefs` (new row, `source="users_agent"` or `"onboarding"`), never an UPDATE.
 - **Evals:** the `users`-routed cases in `route_message.json` (skipped until this phase) plus a
   users-agent dataset: message → expected settings change (tool + arguments), including
   confirmation-required cases.
