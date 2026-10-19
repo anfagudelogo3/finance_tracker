@@ -2,9 +2,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agent_types import AgentRequest
-from config import MSG_EMPTY_INCOME
-from income_agent import handle, _build_system_prompt
+from finance_tracker.core.agent_types import AgentRequest
+from finance_tracker.config import MSG_EMPTY_INCOME
+from finance_tracker.agents.incomes import handle, _build_system_prompt
 
 _DEFAULT_CATEGORIES = [
     "salario",
@@ -36,9 +36,9 @@ def _request(text: str) -> AgentRequest:
 
 
 class TestHandle:
-    @patch("income_agent.save_income")
-    @patch("income_agent.get_user_categories")
-    @patch("income_agent.client")
+    @patch("finance_tracker.agents.incomes.save_income")
+    @patch("finance_tracker.agents.incomes.get_user_categories")
+    @patch("finance_tracker.agents.incomes.client")
     def test_parses_simple_income(
         self, mock_client, mock_get_categories, mock_save_income
     ):
@@ -67,9 +67,9 @@ class TestHandle:
         assert "confidence" in response.data[0]
         mock_save_income.assert_called_once()
 
-    @patch("income_agent.save_income")
-    @patch("income_agent.get_user_categories")
-    @patch("income_agent.client")
+    @patch("finance_tracker.agents.incomes.save_income")
+    @patch("finance_tracker.agents.incomes.get_user_categories")
+    @patch("finance_tracker.agents.incomes.client")
     def test_parses_income_with_non_default_category_and_currency(
         self, mock_client, mock_get_categories, mock_save_income
     ):
@@ -92,9 +92,9 @@ class TestHandle:
         assert response.data[0]["currency"] == "USD"
         assert response.data[0]["category"] == "freelance"
 
-    @patch("income_agent.save_income")
-    @patch("income_agent.get_user_categories")
-    @patch("income_agent.client")
+    @patch("finance_tracker.agents.incomes.save_income")
+    @patch("finance_tracker.agents.incomes.get_user_categories")
+    @patch("finance_tracker.agents.incomes.client")
     def test_parses_multiple_incomes(
         self, mock_client, mock_get_categories, mock_save_income
     ):
@@ -128,9 +128,9 @@ class TestHandle:
         assert response.data[1]["amount"] == 200000
         assert mock_save_income.call_count == 2
 
-    @patch("income_agent.save_income")
-    @patch("income_agent.get_user_categories")
-    @patch("income_agent.client")
+    @patch("finance_tracker.agents.incomes.save_income")
+    @patch("finance_tracker.agents.incomes.get_user_categories")
+    @patch("finance_tracker.agents.incomes.client")
     def test_no_incomes_returns_empty_fallback(
         self, mock_client, mock_get_categories, mock_save_income
     ):
@@ -144,9 +144,9 @@ class TestHandle:
         assert response.reply_text == MSG_EMPTY_INCOME
         mock_save_income.assert_not_called()
 
-    @patch("income_agent.save_income")
-    @patch("income_agent.get_user_categories")
-    @patch("income_agent.client")
+    @patch("finance_tracker.agents.incomes.save_income")
+    @patch("finance_tracker.agents.incomes.get_user_categories")
+    @patch("finance_tracker.agents.incomes.client")
     def test_injects_user_categories_into_prompt_and_forces_tool(
         self, mock_client, mock_get_categories, mock_save_income
     ):

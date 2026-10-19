@@ -2,9 +2,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agent_types import AgentRequest
-from config import MSG_EMPTY_EXPENSE
-from expense_agent import handle, _build_system_prompt
+from finance_tracker.core.agent_types import AgentRequest
+from finance_tracker.config import MSG_EMPTY_EXPENSE
+from finance_tracker.agents.expenses import handle, _build_system_prompt
 
 _DEFAULT_CATEGORIES = ["comida", "transporte", "mercado", "entretenimiento", "otro"]
 
@@ -28,9 +28,9 @@ def _request(text: str) -> AgentRequest:
 
 
 class TestHandle:
-    @patch("expense_agent.save_expense")
-    @patch("expense_agent.get_user_categories")
-    @patch("expense_agent.client")
+    @patch("finance_tracker.agents.expenses.save_expense")
+    @patch("finance_tracker.agents.expenses.get_user_categories")
+    @patch("finance_tracker.agents.expenses.client")
     def test_parses_simple_expense(
         self, mock_client, mock_get_categories, mock_save_expense
     ):
@@ -60,9 +60,9 @@ class TestHandle:
         assert "confidence" in response.data[0]
         mock_save_expense.assert_called_once()
 
-    @patch("expense_agent.save_expense")
-    @patch("expense_agent.get_user_categories")
-    @patch("expense_agent.client")
+    @patch("finance_tracker.agents.expenses.save_expense")
+    @patch("finance_tracker.agents.expenses.get_user_categories")
+    @patch("finance_tracker.agents.expenses.client")
     def test_parses_expense_with_payment_method(
         self, mock_client, mock_get_categories, mock_save_expense
     ):
@@ -86,9 +86,9 @@ class TestHandle:
         assert response.data[0]["amount"] == 120000
         assert response.data[0]["payment_method"] == "tarjeta"
 
-    @patch("expense_agent.save_expense")
-    @patch("expense_agent.get_user_categories")
-    @patch("expense_agent.client")
+    @patch("finance_tracker.agents.expenses.save_expense")
+    @patch("finance_tracker.agents.expenses.get_user_categories")
+    @patch("finance_tracker.agents.expenses.client")
     def test_parses_multiple_expenses(
         self, mock_client, mock_get_categories, mock_save_expense
     ):
@@ -122,9 +122,9 @@ class TestHandle:
         assert response.data[1]["amount"] == 40000
         assert mock_save_expense.call_count == 2
 
-    @patch("expense_agent.save_expense")
-    @patch("expense_agent.get_user_categories")
-    @patch("expense_agent.client")
+    @patch("finance_tracker.agents.expenses.save_expense")
+    @patch("finance_tracker.agents.expenses.get_user_categories")
+    @patch("finance_tracker.agents.expenses.client")
     def test_no_expenses_returns_empty_fallback(
         self, mock_client, mock_get_categories, mock_save_expense
     ):
@@ -138,9 +138,9 @@ class TestHandle:
         assert response.reply_text == MSG_EMPTY_EXPENSE
         mock_save_expense.assert_not_called()
 
-    @patch("expense_agent.save_expense")
-    @patch("expense_agent.get_user_categories")
-    @patch("expense_agent.client")
+    @patch("finance_tracker.agents.expenses.save_expense")
+    @patch("finance_tracker.agents.expenses.get_user_categories")
+    @patch("finance_tracker.agents.expenses.client")
     def test_injects_user_categories_into_prompt_and_forces_tool(
         self, mock_client, mock_get_categories, mock_save_expense
     ):

@@ -136,7 +136,7 @@ not yet added — they land with the agents that need them (orchestrator classif
 image expense, report date-range parsing). `OPENAI_TEXT_MODEL`/`OPENAI_VISION_MODEL` are
 not removed — image expense and report/excel parsing still depend on them.
 
-`src/claude_client.py` — a module-scope singleton, mirroring how `parser.py` does
+`src/finance_tracker/core/claude_client.py` — a module-scope singleton, mirroring how `parser.py` does
 `client = OpenAI(api_key=OPENAI_API_KEY)`:
 
 ```python
@@ -163,7 +163,7 @@ SDK version. Later agents should follow the same pattern.
 | `evals/__init__.py` | Bootstrap dummy `ANTHROPIC_API_KEY` the same way `OPENAI_API_KEY` is bootstrapped. | Shipped |
 | `evals/run.py` | New `_run_expense_agent()`, sharing scoring/aggregation with `_run_parse_expense()` via `_run_expense_dataset()`. Runs against the same `parse_expense.json` dataset, printed side by side. Skips (with a clear message) instead of failing when `ANTHROPIC_API_KEY` isn't a real key, so `--check` doesn't spuriously fail for developers who haven't set it. | Shipped |
 | `pyproject.toml` (`evals` group) | Added `openinference-instrumentation-anthropic` alongside `openinference-instrumentation-openai`. | Shipped |
-| `src/tracing.py` | `setup_tracing()` gained `AnthropicInstrumentor().instrument()` alongside `OpenAIInstrumentor().instrument()`. | Shipped |
+| `src/finance_tracker/observability/tracing.py` | `setup_tracing()` gained `AnthropicInstrumentor().instrument()` alongside `OpenAIInstrumentor().instrument()`. | Shipped |
 | `evals/run.py` → `THRESHOLDS["expense_agent"]` | Set to 90%/95%/90%, headroom below an observed 100% run (n=15) that beat the OpenAI path's 93%/94%. | Shipped |
 | `evals/scoring.py` | `score_expense` reused as-is for income (Phase 2) and reporting (Phase 3's `score_date_range`, a sibling scorer already in this file) — same pattern, only the shape being scored differs. | Shipped |
 | `evals/datasets/` | `parse_income.json` (Phase 2, shipped); `parse_report_request.json` gained one Claude-fallback-triggering case (Phase 3). `classify_intent.json` still not needed — no guardrail/classifier exists (see deviation 1). | Shipped (income/report); guardrail dataset still not applicable |
@@ -177,7 +177,7 @@ signature:
 def handle(request: AgentRequest) -> AgentResponse: ...
 ```
 
-### `AgentRequest` / `AgentResponse` — as implemented, `src/agent_types.py`
+### `AgentRequest` / `AgentResponse` — as implemented, `src/finance_tracker/core/agent_types.py`
 
 Reuses existing dict shapes instead of inventing parallel types for things that already
 have one: `media` matches `media.store_all_media()`'s output, `conversation` matches

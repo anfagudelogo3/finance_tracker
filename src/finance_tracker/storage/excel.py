@@ -7,7 +7,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from config import S3_BUCKET_NAME, PRESIGNED_URL_EXPIRY_SECONDS
+from finance_tracker.config import S3_BUCKET_NAME, PRESIGNED_URL_EXPIRY_SECONDS
 
 logger = logging.getLogger(__name__)
 

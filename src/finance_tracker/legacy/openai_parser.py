@@ -1,23 +1,25 @@
+"""OpenAI code paths that haven't migrated to Claude yet: image expenses (vision),
+audio transcription (Whisper — permanent, Claude has no speech-to-text), Excel
+date-range parsing, and the original text-expense parser (still evaluated for parity).
+"""
 import base64
 import io
 import json
 import logging
-import unicodedata
 from datetime import date, datetime
-from difflib import get_close_matches
 from zoneinfo import ZoneInfo
 
 from openai import OpenAI
 
-from config import (
+from finance_tracker.config import (
     OPENAI_API_KEY,
     OPENAI_TEXT_MODEL,
     OPENAI_VISION_MODEL,
     OPENAI_AUDIO_MODEL,
     OPENAI_AUDIO_LANGUAGE,
-    FUZZY_MATCH_CUTOFF,
     DEFAULT_EXPENSE_CATEGORIES,
 )
+from finance_tracker.core.confidence import estimate_confidence
 
 logger = logging.getLogger(__name__)
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -97,21 +99,9 @@ def parse_expense(text: str, categories: list[str] | None = None) -> list[dict]:
     today = datetime.now(_BOGOTA).date().isoformat()
     for item in parsed_list:
         item["date"] = today
-        item["confidence"] = _estimate_confidence(item)
+        item["confidence"] = estimate_confidence(item)
 
     return parsed_list
-
-
-def _estimate_confidence(parsed: dict) -> float:
-    """Simple heuristic confidence score based on field completeness."""
-    score = 0.0
-    if parsed.get("amount") and isinstance(parsed["amount"], (int, float)):
-        score += 0.5
-    if parsed.get("category") and parsed["category"] != "otro":
-        score += 0.3
-    if parsed.get("description"):
-        score += 0.2
-    return round(score, 2)
 
 
 def transcribe_audio(audio_bytes: bytes, filename: str = "audio.ogg") -> str:
@@ -173,87 +163,11 @@ def parse_expense_from_image(
     today = datetime.now(_BOGOTA).date().isoformat()
     for item in parsed_list:
         item["date"] = today
-        item["confidence"] = _estimate_confidence(item)
+        item["confidence"] = estimate_confidence(item)
 
     return parsed_list
 
 
-_EXCEL_KEYWORDS = [
-    # Explicit format names
-    "excel", "xlsx", "spreadsheet",
-    # Spanish — spreadsheet variants
-    "hoja de calculo", "hoja de cálculo",
-    "hoja calculo", "hoja calculo",
-    "hojas de calculo", "hojas de cálculo",
-    # Spanish export/download verbs
-    "exportar", "exportame", "exporta",
-    "descargar", "descarga", "descargame",
-]
-
-
-def is_excel_request(text: str) -> bool:
-    """Return True if the user is asking for an Excel export."""
-    normalized = _normalize(text)
-    return any(kw in normalized for kw in _EXCEL_KEYWORDS)
-
-
-_REPORT_KEYWORDS_SINGLE = [
-    # Spanish
-    "reporte", "resumen", "informe", "analisis", "estadisticas", "estadistica",
-    "balance", "historial", "desglose", "gastos",
-    # English
-    "report", "summary", "breakdown", "spending", "expenses", "analytics",
-]
-
-# Multi-word phrases: exact substring match only (fuzzy on phrases risks false positives)
-_REPORT_KEYWORDS_PHRASE = [
-    # Spanish — questions
-    "cuanto gaste", "cuanto llevo", "cuanto he gastado", "cuanto va",
-    "en que gaste", "en que he gastado", "como voy", "como van mis",
-    # Spanish — possessives
-    "mis gastos", "mis finanzas", "mi resumen", "mi reporte", "mi balance",
-    # Spanish — scoped
-    "gastos del", "gastos de", "gastos en", "gasto del", "gasto de",
-    "resumen del", "resumen de", "informe del", "informe de",
-    # Spanish — time expressions that imply a report
-    "esta semana gaste", "este mes gaste",
-    # English
-    "how much did i spend", "how much have i spent", "what did i spend",
-    "my expenses", "my spending", "expenses from", "spending this",
-    "show me my", "give me a",
-]
-
-
-
-def _normalize(text: str) -> str:
-    """Lowercase and strip accents for accent-insensitive keyword matching."""
-    return unicodedata.normalize("NFD", text.lower()).encode("ascii", "ignore").decode()
-
-
-def is_report_request(text: str) -> bool:
-    """Return True if the message is asking for a spending report.
-
-    Two-pass strategy:
-    1. Exact substring match against all keywords (free, fast).
-    2. If no match, fuzzy word-level match against single-word triggers using
-       difflib.get_close_matches at cutoff=0.8 (stdlib, no extra dependencies).
-    """
-    normalized = _normalize(text)
-
-    # Pass 1: exact match on single words and phrases
-    all_keywords = _REPORT_KEYWORDS_SINGLE + _REPORT_KEYWORDS_PHRASE
-    if any(kw in normalized for kw in all_keywords):
-        logger.debug("Report request detected via exact match")
-        return True
-
-    # Pass 2: fuzzy match each token against single-word triggers only
-    tokens = normalized.split()
-    for token in tokens:
-        if get_close_matches(token, _REPORT_KEYWORDS_SINGLE, n=1, cutoff=FUZZY_MATCH_CUTOFF):
-            logger.debug("Report request detected via fuzzy match on token '%s'", token)
-            return True
-
-    return False
 
 
 def parse_report_request(text: str, current_datetime: str) -> dict:

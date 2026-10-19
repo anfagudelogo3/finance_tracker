@@ -29,7 +29,7 @@ with OpenAI, persists structured data to PostgreSQL, and replies through the Twi
 
 ## Request lifecycle
 
-The entry point is [`handler.handler`](../src/handler.py). For a `POST` it runs
+The entry point is [`handler.handler`](../src/finance_tracker/handler.py). For a `POST` it runs
 `_handle_message`, which performs these steps in order:
 
 1. **Parse the form body** — `_parse_form_body` decodes the (optionally base64-encoded)
@@ -58,28 +58,36 @@ The entry point is [`handler.handler`](../src/handler.py). For a `POST` it runs
 
 ## Modules
 
-All application code lives in [`src/`](../src). Each module has a single responsibility:
+All application code lives in the [`finance_tracker`](../src/finance_tracker) package. Each module has a single responsibility (paths relative to `src/finance_tracker/`):
 
 | Module | Responsibility |
 |--------|----------------|
-| [`handler.py`](../src/handler.py) | Lambda entry point; orchestrates the full pipeline and intent routing |
-| [`webhook.py`](../src/webhook.py) | Twilio signature verification and payload → message extraction |
-| [`parser.py`](../src/parser.py) | OpenAI calls (text/vision/audio), intent detection, date-range extraction, confidence scoring |
-| [`database.py`](../src/database.py) | PostgreSQL connection and all queries (`messages` + `expenses`) |
-| [`media.py`](../src/media.py) | Download Twilio media and store it in S3 |
-| [`excel.py`](../src/excel.py) | Build `.xlsx` workbooks and produce presigned S3 download URLs |
-| [`reporting.py`](../src/reporting.py) | Format in-chat spending summaries grouped by currency and category |
-| [`whatsapp.py`](../src/whatsapp.py) | Send messages, documents, and confirmations via the Twilio SDK |
-| [`config.py`](../src/config.py) | Load all configuration from environment variables |
+| [`handler.py`](../src/finance_tracker/handler.py) | Lambda handler; runs the pipeline and picks the branch (Excel / report / image / text-audio) |
+| [`config.py`](../src/finance_tracker/config.py) | Load all configuration from environment variables; tunable constants and reply strings |
+| [`core/agent_types.py`](../src/finance_tracker/core/agent_types.py) | `AgentRequest` / `AgentResponse`, the contract every agent implements |
+| [`core/claude_client.py`](../src/finance_tracker/core/claude_client.py) | Anthropic client singleton |
+| [`core/confidence.py`](../src/finance_tracker/core/confidence.py), [`core/text.py`](../src/finance_tracker/core/text.py) | Confidence heuristic; accent-insensitive text normalization |
+| [`routing/fast_paths.py`](../src/finance_tracker/routing/fast_paths.py) | All deterministic keyword checks (Excel, report, income) |
+| [`routing/orchestrator.py`](../src/finance_tracker/routing/orchestrator.py) | Dispatches a request to the matching agent |
+| [`agents/expenses.py`](../src/finance_tracker/agents/expenses.py), [`agents/incomes.py`](../src/finance_tracker/agents/incomes.py) | Claude extraction + persistence of expenses / incomes |
+| [`agents/reporting.py`](../src/finance_tracker/agents/reporting.py) | Date-range resolution (deterministic + Claude fallback) and in-chat reports |
+| [`agents/report_format.py`](../src/finance_tracker/agents/report_format.py) | Format in-chat spending summaries grouped by currency and category |
+| [`channels/whatsapp/webhook.py`](../src/finance_tracker/channels/whatsapp/webhook.py) | Twilio signature verification and payload → message extraction |
+| [`channels/whatsapp/sender.py`](../src/finance_tracker/channels/whatsapp/sender.py) | Send messages, documents, and confirmations via the Twilio SDK |
+| [`storage/database.py`](../src/finance_tracker/storage/database.py) | PostgreSQL connection and all queries |
+| [`storage/media.py`](../src/finance_tracker/storage/media.py) | Download Twilio media and store it in S3 |
+| [`storage/excel.py`](../src/finance_tracker/storage/excel.py) | Build `.xlsx` workbooks and produce presigned S3 download URLs |
+| [`legacy/openai_parser.py`](../src/finance_tracker/legacy/openai_parser.py) | OpenAI paths not yet migrated: image vision, Excel date ranges, original text parser; Whisper transcription (permanent) |
+| [`observability/tracing.py`](../src/finance_tracker/observability/tracing.py) | Optional Phoenix/OpenTelemetry tracing |
 
 ## Intent routing
 
 A single inbound text is classified into exactly one of three intents, evaluated in this
 order (first match wins):
 
-1. **Excel export** — `parser.is_excel_request`: keyword match for `excel`, `xlsx`,
+1. **Excel export** — `fast_paths.is_excel_request`: keyword match for `excel`, `xlsx`,
    `exportar`, `descargar`, "hoja de cálculo", etc.
-2. **Report** — `parser.is_report_request`: a two-pass match (exact substring against a
+2. **Report** — `fast_paths.is_report_request`: a two-pass match (exact substring against a
    keyword/phrase list, then fuzzy single-word matching via `difflib` at cutoff `0.8`).
 3. **Expense** — the default when neither export nor report keywords are present.
 
@@ -90,7 +98,7 @@ order (first match wins):
 three keyword-routed branches above are unchanged, but the expense branch now splits by
 message type. Text and audio-transcript messages build an `AgentRequest` and go through
 `orchestrator.handle_message` → `expense_agent.handle` (Claude, forced tool-use
-extraction). Image messages are unchanged — still `parser.parse_expense_from_image`
+extraction). Image messages are unchanged — still `legacy.openai_parser.parse_expense_from_image`
 (OpenAI vision) called directly from `handler.py`. See `agent-architecture.md` for why the
 split is scoped this way and what's still planned.
 

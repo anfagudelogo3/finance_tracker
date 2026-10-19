@@ -19,14 +19,13 @@ from datetime import datetime
 from pathlib import Path
 
 # evals/__init__.py bootstraps sys.path and dummy env vars before src imports.
-from tracing import setup_tracing
-from parser import parse_expense, parse_report_request
-from expense_agent import _extract as _extract_expense_claude
-from income_agent import _extract as _extract_income_claude
-from reporting_agent import resolve_date_range
-from orchestrator import is_income_request
-from parser import is_report_request
-from config import DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES
+from finance_tracker.observability.tracing import setup_tracing
+from finance_tracker.legacy.openai_parser import parse_expense, parse_report_request
+from finance_tracker.agents.expenses import _extract as _extract_expense_claude
+from finance_tracker.agents.incomes import _extract as _extract_income_claude
+from finance_tracker.agents.reporting import resolve_date_range
+from finance_tracker.routing.fast_paths import is_income_request, is_report_request
+from finance_tracker.config import DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES
 from evals.scoring import score_expense, score_date_range, score_routing
 
 DATASETS_DIR = Path(__file__).parent / "datasets"

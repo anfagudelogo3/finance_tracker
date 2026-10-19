@@ -3,12 +3,12 @@ import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from agent_types import AgentRequest, AgentResponse
-from claude_client import client
-from config import CLAUDE_EXTRACTION_MODEL
-from database import get_expenses
-from parser import _normalize
-from reporting import format_report
+from finance_tracker.core.agent_types import AgentRequest, AgentResponse
+from finance_tracker.core.claude_client import client
+from finance_tracker.config import CLAUDE_EXTRACTION_MODEL
+from finance_tracker.storage.database import get_expenses
+from finance_tracker.core.text import normalize
+from finance_tracker.agents.report_format import format_report
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ def _resolve_deterministic(text: str, now: datetime) -> dict | None:
     arithmetic for "la semana pasada" — both are exact, zero-ambiguity Python
     computations once you stop asking an LLM to do calendar math in free text.
     """
-    normalized = _normalize(text)
+    normalized = normalize(text)
     today = now.date()
 
     if any(p in normalized for p in _LAST_WEEK_PHRASES):
@@ -167,7 +167,7 @@ def _resolve_with_claude(text: str, now: datetime, conversation: list[dict]) -> 
     """Fallback for date expressions the deterministic rules don't cover: specific
     date mentions, explicit ranges, and referential follow-ups ("¿y la anterior?") that
     need conversation history to resolve. Forced tool-use, not prompt-only JSON, same
-    pattern as expense_agent/income_agent."""
+    pattern as agents.expenses/agents.incomes."""
     now_str = now.strftime("%Y-%m-%d (%A)")
     system = f"""Today is {now_str} (America/Bogota). The user is asking for a spending report. Resolve the exact date range they're referring to and call record_date_range.
 
@@ -213,7 +213,7 @@ def resolve_date_range(
 def handle(request: AgentRequest) -> AgentResponse:
     """Read and aggregate existing expenses — no persistence. AgentResponse.data holds
     the query results used to build the report, not a newly-created row (unlike
-    expense_agent/income_agent's extract-then-persist shape)."""
+    agents.expenses/agents.incomes's extract-then-persist shape)."""
     now = datetime.fromisoformat(request.now)
     date_range = resolve_date_range(request.text, now, request.conversation)
     expenses = get_expenses(

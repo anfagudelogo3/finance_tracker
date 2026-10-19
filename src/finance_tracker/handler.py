@@ -5,24 +5,23 @@ from datetime import datetime
 from urllib.parse import parse_qs
 from zoneinfo import ZoneInfo
 
-# Tracing is set up before parser/orchestrator are imported so OpenAI and Claude
-# calls are instrumented (both client singletons are created at import time).
-from tracing import setup_tracing
+# Tracing is set up before the OpenAI parser / orchestrator are imported so OpenAI and
+# Claude calls are instrumented (both client singletons are created at import time).
+from finance_tracker.observability.tracing import setup_tracing
 setup_tracing()
 
-from config import ALLOWED_PHONE_NUMBERS, WEBHOOK_URL, MSG_ERROR, MSG_EMPTY_EXPENSE
-from webhook import verify_signature, extract_message
-from parser import (
+from finance_tracker.config import ALLOWED_PHONE_NUMBERS, WEBHOOK_URL, MSG_ERROR, MSG_EMPTY_EXPENSE
+from finance_tracker.channels.whatsapp.webhook import verify_signature, extract_message
+from finance_tracker.legacy.openai_parser import (
     parse_expense_from_image,
     transcribe_audio,
-    is_excel_request,
-    is_report_request,
     parse_report_request
 )
-from agent_types import AgentRequest
-import orchestrator
-from excel import create_excel_bytes, upload_and_sign
-from database import (
+from finance_tracker.routing.fast_paths import is_excel_request, is_report_request
+from finance_tracker.core.agent_types import AgentRequest
+from finance_tracker.routing import orchestrator
+from finance_tracker.storage.excel import create_excel_bytes, upload_and_sign
+from finance_tracker.storage.database import (
     save_message,
     save_expense,
     get_expenses,
@@ -32,8 +31,8 @@ from database import (
     save_turn,
     load_recent_turns,
 )
-from media import store_all_media
-from whatsapp import send_message, send_document, format_confirmation
+from finance_tracker.storage.media import store_all_media
+from finance_tracker.channels.whatsapp.sender import send_message, send_document, format_confirmation
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -189,7 +188,7 @@ def _handle_message(event):
             save_turn(user_id, "assistant", f"[excel] {filename}")
             return {"statusCode": 200, "body": ""}
 
-        # Report branch — routes through the orchestrator to reporting_agent
+        # Report branch — routes through the orchestrator to agents.reporting
         if is_report_request(message["text"]):
             logger.info("Report request detected from %s", message["phone"])
             return _dispatch_and_reply(

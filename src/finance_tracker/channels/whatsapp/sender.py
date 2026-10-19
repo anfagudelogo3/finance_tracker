@@ -2,7 +2,7 @@ import logging
 
 from twilio.rest import Client
 
-from config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER
+from finance_tracker.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER
 
 logger = logging.getLogger(__name__)
 _client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)

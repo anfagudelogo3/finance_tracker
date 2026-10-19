@@ -4,7 +4,7 @@ from contextlib import contextmanager
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-from config import (
+from finance_tracker.config import (
     DATABASE_URL,
     DEFAULT_EXPENSE_CATEGORIES,
     DEFAULT_INCOME_CATEGORIES,

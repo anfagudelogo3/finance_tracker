@@ -7,17 +7,20 @@ on the code.
 
 ```
 finance_tracker/
-├── src/                      # Application code (deployed flat into the Lambda ZIP)
-│   ├── handler.py            # Lambda entry point + intent routing
-│   ├── webhook.py            # Twilio signature verification + message extraction
-│   ├── parser.py             # OpenAI calls, intent detection, confidence scoring
-│   ├── database.py           # PostgreSQL connection + queries
-│   ├── media.py              # Twilio media download → S3
-│   ├── excel.py              # .xlsx generation + presigned URLs
-│   ├── reporting.py          # In-chat report formatting
-│   ├── whatsapp.py           # Outbound Twilio messages/documents
-│   └── config.py             # Environment-variable configuration
-├── tests/                    # pytest unit tests (external services mocked)
+├── src/finance_tracker/          # The application package (installed into the Lambda ZIP)
+│   ├── handler.py                # Lambda handler: webhook → pipeline → reply
+│   ├── config.py                 # Environment variables + tunable constants
+│   ├── core/                     # Agent contract (AgentRequest/AgentResponse), Claude client,
+│   │                             #   confidence heuristic, text normalization
+│   ├── routing/                  # fast_paths.py (keyword checks) + orchestrator.py (dispatch)
+│   ├── agents/                   # expenses.py, incomes.py, reporting.py (+ report_format.py)
+│   ├── channels/whatsapp/        # webhook.py (Twilio verification) + sender.py (outbound)
+│   ├── storage/                  # database.py (Postgres), media.py (S3), excel.py (.xlsx)
+│   ├── legacy/                   # openai_parser.py: OpenAI vision/Whisper/Excel-date paths
+│   └── observability/            # tracing.py (optional Phoenix)
+├── lambda/handler.py                 # Zip-root entry point → finance_tracker.handler.handler
+├── tests/                            # pytest, mirrors the package (agents/, routing/, ...)
+├── evals/                            # LLM evals: datasets/, scoring.py, run.py
 ├── scripts/
 │   ├── setup_db.sql          # Schema + idempotent migrations
 │   └── deploy.sh             # Build the Lambda ZIP
@@ -28,10 +31,12 @@ finance_tracker/
 └── .env.example              # Template for required environment variables
 ```
 
-> **Flat imports:** modules import each other by bare name (`from parser import …`,
-> `from config import …`) because `deploy.sh` copies everything in `src/` to the root of
-> the Lambda package, where they sit alongside `handler.py`. Keep imports flat — do not
-> introduce a `src.` package prefix, or the Lambda runtime won't resolve them.
+> **Package imports:** all code lives in the `finance_tracker` package and imports
+> absolutely (`from finance_tracker.storage.database import …`). `deploy.sh` installs the
+> package into the Lambda ZIP (`uv pip install .`) and copies `lambda/handler.py` to the
+> ZIP root, so the Lambda handler setting stays `handler.handler`. Don't use bare-name
+> (`from config import …`) or relative imports, and keep subpackage `__init__.py` files
+> empty.
 
 ## Conventions
 

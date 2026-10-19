@@ -2,7 +2,7 @@
 
 Divergence from expense_agent/income_agent's test shape, worth noting explicitly:
 there is no save_<x> to mock here at all — reporting_agent never writes a row, so
-there's nothing analogous to `@patch("expense_agent.save_expense")` in this file.
+there's nothing analogous to `@patch("finance_tracker.agents.expenses.save_expense")` in this file.
 Most coverage is plain parametrized function calls against `_resolve_deterministic`
 (pure Python, no mocking needed) rather than mocked Claude responses, since Claude is
 only a fallback path here, not the primary implementation.
@@ -15,13 +15,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agent_types import AgentRequest
-from reporting_agent import _resolve_deterministic, handle, resolve_date_range
+from finance_tracker.core.agent_types import AgentRequest
+from finance_tracker.agents.reporting import _resolve_deterministic, handle, resolve_date_range
 
 _DATASET_PATH = (
-    Path(__file__).parent.parent / "evals" / "datasets" / "parse_report_request.json"
+    Path(__file__).parents[2] / "evals" / "datasets" / "parse_report_request.json"
 )
-_CASES = json.loads(_DATASET_PATH.read_text())
+_CASES = json.loads(_DATASET_PATH.read_text(encoding="utf-8"))
 
 # All dataset cases except the ones deliberately designed to miss every deterministic
 # rule (those are covered by TestFallsBackToClaudeWhenUnrecognized instead).
@@ -61,7 +61,7 @@ class TestResolveDeterministic:
 
 
 class TestFallsBackToClaudeWhenUnrecognized:
-    @patch("reporting_agent.client")
+    @patch("finance_tracker.agents.reporting.client")
     def test_resolve_date_range_calls_claude_for_unrecognized_text(self, mock_client):
         block = MagicMock(
             type="tool_use",
@@ -80,7 +80,7 @@ class TestFallsBackToClaudeWhenUnrecognized:
         }
         assert "2026-06-25" in call.kwargs["system"]
 
-    @patch("reporting_agent.client")
+    @patch("finance_tracker.agents.reporting.client")
     def test_resolve_date_range_skips_claude_for_recognized_text(self, mock_client):
         now = datetime.fromisoformat("2026-06-25T10:00:00-05:00")
 
@@ -89,7 +89,7 @@ class TestFallsBackToClaudeWhenUnrecognized:
         assert result == {"min_date": "2026-06-01", "max_date": "2026-06-25"}
         mock_client.messages.create.assert_not_called()
 
-    @patch("reporting_agent.client")
+    @patch("finance_tracker.agents.reporting.client")
     def test_resolve_date_range_threads_conversation_into_messages(self, mock_client):
         block = MagicMock(
             type="tool_use",
@@ -112,7 +112,7 @@ class TestFallsBackToClaudeWhenUnrecognized:
         assert messages[:2] == conversation
         assert messages[2] == {"role": "user", "content": "¿y la anterior?"}
 
-    @patch("reporting_agent.client")
+    @patch("finance_tracker.agents.reporting.client")
     def test_resolve_date_range_defaults_conversation_to_empty(self, mock_client):
         # No conversation arg at all — existing Phase 3 call sites must keep working.
         block = MagicMock(
@@ -131,7 +131,7 @@ class TestFallsBackToClaudeWhenUnrecognized:
 
 
 class TestHandle:
-    @patch("reporting_agent.get_expenses")
+    @patch("finance_tracker.agents.reporting.get_expenses")
     def test_queries_and_formats_report(self, mock_get_expenses):
         mock_get_expenses.return_value = [
             {"amount": 32000, "currency": "COP", "category": "comida"},
@@ -158,8 +158,8 @@ class TestHandle:
         assert response.data == mock_get_expenses.return_value
         assert response.reply_attachment is None
 
-    @patch("reporting_agent.get_expenses")
-    @patch("reporting_agent.client")
+    @patch("finance_tracker.agents.reporting.get_expenses")
+    @patch("finance_tracker.agents.reporting.client")
     def test_threads_request_conversation_into_resolve_date_range(
         self, mock_client, mock_get_expenses
     ):
@@ -190,7 +190,7 @@ class TestHandle:
         messages = mock_client.messages.create.call_args.kwargs["messages"]
         assert messages[:2] == conversation
 
-    @patch("reporting_agent.get_expenses")
+    @patch("finance_tracker.agents.reporting.get_expenses")
     def test_no_expenses_in_range(self, mock_get_expenses):
         mock_get_expenses.return_value = []
         request = AgentRequest(

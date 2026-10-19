@@ -2,8 +2,9 @@ from unittest.mock import patch
 
 import pytest
 
-import orchestrator
-from agent_types import AgentRequest
+from finance_tracker.routing import orchestrator
+from finance_tracker.routing.fast_paths import is_income_request
+from finance_tracker.core.agent_types import AgentRequest
 
 
 def _request(text: str = "almuerzo 32000") -> AgentRequest:
@@ -33,7 +34,7 @@ class TestIsIncomeRequest:
         ],
     )
     def test_matches_income_phrases(self, text):
-        assert orchestrator.is_income_request(text) is True
+        assert is_income_request(text) is True
 
     @pytest.mark.parametrize(
         "text",
@@ -47,13 +48,13 @@ class TestIsIncomeRequest:
         ],
     )
     def test_does_not_match_expense_phrases(self, text):
-        assert orchestrator.is_income_request(text) is False
+        assert is_income_request(text) is False
 
 
 class TestHandleMessage:
-    @patch("orchestrator.reporting_agent")
-    @patch("orchestrator.income_agent")
-    @patch("orchestrator.expense_agent")
+    @patch("finance_tracker.routing.orchestrator.reporting")
+    @patch("finance_tracker.routing.orchestrator.incomes")
+    @patch("finance_tracker.routing.orchestrator.expenses")
     def test_dispatches_expense_text_to_expense_agent(
         self, mock_expense_agent, mock_income_agent, mock_reporting_agent
     ):
@@ -67,9 +68,9 @@ class TestHandleMessage:
         mock_reporting_agent.handle.assert_not_called()
         assert result == "expense-response"
 
-    @patch("orchestrator.reporting_agent")
-    @patch("orchestrator.income_agent")
-    @patch("orchestrator.expense_agent")
+    @patch("finance_tracker.routing.orchestrator.reporting")
+    @patch("finance_tracker.routing.orchestrator.incomes")
+    @patch("finance_tracker.routing.orchestrator.expenses")
     def test_dispatches_income_text_to_income_agent(
         self, mock_expense_agent, mock_income_agent, mock_reporting_agent
     ):
@@ -83,9 +84,9 @@ class TestHandleMessage:
         mock_reporting_agent.handle.assert_not_called()
         assert result == "income-response"
 
-    @patch("orchestrator.reporting_agent")
-    @patch("orchestrator.income_agent")
-    @patch("orchestrator.expense_agent")
+    @patch("finance_tracker.routing.orchestrator.reporting")
+    @patch("finance_tracker.routing.orchestrator.incomes")
+    @patch("finance_tracker.routing.orchestrator.expenses")
     def test_dispatches_report_text_to_reporting_agent(
         self, mock_expense_agent, mock_income_agent, mock_reporting_agent
     ):
@@ -99,9 +100,9 @@ class TestHandleMessage:
         mock_expense_agent.handle.assert_not_called()
         assert result == "report-response"
 
-    @patch("orchestrator.reporting_agent")
-    @patch("orchestrator.income_agent")
-    @patch("orchestrator.expense_agent")
+    @patch("finance_tracker.routing.orchestrator.reporting")
+    @patch("finance_tracker.routing.orchestrator.incomes")
+    @patch("finance_tracker.routing.orchestrator.expenses")
     def test_report_takes_priority_over_income_phrasing(
         self, mock_expense_agent, mock_income_agent, mock_reporting_agent
     ):

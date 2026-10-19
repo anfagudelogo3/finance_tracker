@@ -27,7 +27,7 @@ cp .env.example .env
 ```
 
 All configuration is read from environment variables at import time in
-[`config.py`](../src/config.py). **All of the following are required** — the process will
+[`config.py`](../src/finance_tracker/config.py). **All of the following are required** — the process will
 fail to start if any is missing:
 
 | Variable | Description | Example |
@@ -45,7 +45,7 @@ fail to start if any is missing:
 > full URL. If the value here differs from what Twilio calls (even a trailing slash),
 > signature verification fails and every request returns `401`.
 
-Non-secret tunables are hard-coded in [`config.py`](../src/config.py) and do not need to
+Non-secret tunables are hard-coded in [`config.py`](../src/finance_tracker/config.py) and do not need to
 be set as env vars:
 
 | Constant | Value | Meaning |
@@ -79,10 +79,11 @@ database), so no live credentials are needed to run it.
 uv run pytest tests/
 ```
 
-> **Import path note:** the application modules live in `src/` and are imported by their
-> bare names (e.g. `from parser import …`). If you see `ModuleNotFoundError`, run pytest
-> with `src` on the path, e.g. `PYTHONPATH=src uv run pytest tests/`, or configure it in
-> `pyproject.toml` / a `conftest.py`. See [development.md](development.md#running-the-tests).
+> **Import path note:** the application is the `finance_tracker` package in
+> `src/finance_tracker/`. `uv sync` installs it in editable mode, and pytest also has `src`
+> on its `pythonpath` (`pyproject.toml`), so `from finance_tracker… import …` works in tests.
+> On Windows, if `ZoneInfo("America/Bogota")` fails, install `tzdata`
+> (`uv run --with tzdata pytest tests/`). See [development.md](development.md#running-the-tests).
 
 ## 5. Local end-to-end testing
 

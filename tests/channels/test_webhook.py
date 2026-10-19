@@ -2,16 +2,16 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from webhook import verify_signature, extract_message
+from finance_tracker.channels.whatsapp.webhook import verify_signature, extract_message
 
 
 class TestVerifySignature:
-    @patch("webhook.TWILIO_AUTH_TOKEN", "test_auth_token")
+    @patch("finance_tracker.channels.whatsapp.webhook.TWILIO_AUTH_TOKEN", "test_auth_token")
     def test_valid_signature(self):
         mock_validator = MagicMock()
         mock_validator.validate.return_value = True
 
-        with patch("webhook.RequestValidator", return_value=mock_validator):
+        with patch("finance_tracker.channels.whatsapp.webhook.RequestValidator", return_value=mock_validator):
             result = verify_signature(
                 "https://example.com/webhook",
                 {"Body": "almuerzo 32000"},
@@ -25,12 +25,12 @@ class TestVerifySignature:
             "valid_signature",
         )
 
-    @patch("webhook.TWILIO_AUTH_TOKEN", "test_auth_token")
+    @patch("finance_tracker.channels.whatsapp.webhook.TWILIO_AUTH_TOKEN", "test_auth_token")
     def test_invalid_signature(self):
         mock_validator = MagicMock()
         mock_validator.validate.return_value = False
 
-        with patch("webhook.RequestValidator", return_value=mock_validator):
+        with patch("finance_tracker.channels.whatsapp.webhook.RequestValidator", return_value=mock_validator):
             result = verify_signature(
                 "https://example.com/webhook",
                 {"Body": "almuerzo 32000"},

@@ -36,19 +36,22 @@ Full documentation lives in [`docs/`](docs/README.md):
 ## Project Structure
 
 ```
-src/
-├── handler.py      # Lambda entry point — routes POST messages
-├── webhook.py      # Twilio signature verification + message extraction
-├── parser.py       # OpenAI call + confidence scoring
-├── database.py     # PostgreSQL connection + queries (messages + expenses tables)
-├── whatsapp.py     # Send confirmation messages via Twilio SDK
-└── config.py       # Environment variable loading
+src/finance_tracker/          # The application package (installed into the Lambda ZIP)
+├── handler.py                # Lambda handler: webhook → pipeline → reply
+├── config.py                 # Environment variables + tunable constants
+├── core/                     # Agent contract (AgentRequest/AgentResponse), Claude client,
+│                             #   confidence heuristic, text normalization
+├── routing/                  # fast_paths.py (keyword checks) + orchestrator.py (dispatch)
+├── agents/                   # expenses.py, incomes.py, reporting.py (+ report_format.py)
+├── channels/whatsapp/        # webhook.py (Twilio verification) + sender.py (outbound)
+├── storage/                  # database.py (Postgres), media.py (S3), excel.py (.xlsx)
+├── legacy/                   # openai_parser.py: OpenAI vision/Whisper/Excel-date paths
+└── observability/            # tracing.py (optional Phoenix)
+lambda/handler.py             # Zip-root entry point → finance_tracker.handler.handler
+tests/                        # pytest, mirrors the package (agents/, routing/, ...)
+evals/                        # LLM evals: datasets/, scoring.py, run.py
 notebooks/
 └── test_pipeline.ipynb  # Local testing without WhatsApp/Lambda
-tests/
-├── test_webhook.py
-├── test_parser.py
-└── test_database.py
 scripts/
 ├── deploy.sh       # Package and deploy ZIP to Lambda (Linux x86_64 compatible)
 └── setup_db.sql    # Database schema creation

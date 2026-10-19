@@ -6,7 +6,7 @@ Finance Tracker uses PostgreSQL (Neon in production). The schema is defined by
 As of **Phase 0** (multi-agent foundation), the schema is organized around a `users`
 entity. Every row of every table is owned by a user, resolved from the verified WhatsApp
 phone number. Some tables (`incomes`, `budgets`) are created now but only used by agents
-introduced in later phases — see [agent-architecture.md](../agent-architecture.md) for the
+introduced in later phases — see [agent-architecture.md](agent-architecture.md) for the
 current agent rollout plan (identity/categories/conversation-turn design here is unchanged
 by it; only the agent architecture built on top of this schema changed).
 
@@ -21,7 +21,7 @@ users ──┬── messages ──── expenses (FK message_id, user_id)
 ## `users`
 
 One row per person (auto-created on first message; identity comes from the verified
-phone). Written by [`database.get_or_create_user`](../src/database.py).
+phone). Written by [`database.get_or_create_user`](../src/finance_tracker/storage/database.py).
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -49,7 +49,7 @@ One row per inbound WhatsApp message (raw audit log).
 
 Short-term chatbot memory: the recent back-and-forth used to resolve follow-ups like
 *"cámbialo"* → *"¿a cuánto?"* → *"5000"*. Written by
-[`database.save_turn`](../src/database.py), read by `load_recent_turns`.
+[`database.save_turn`](../src/finance_tracker/storage/database.py), read by `load_recent_turns`.
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -60,7 +60,7 @@ Short-term chatbot memory: the recent back-and-forth used to resolve follow-ups 
 | `created_at` | `TIMESTAMPTZ` | Used for the time-window memory query |
 
 How much history is loaded is controlled by `CONVERSATION_MAX_TURNS` (cap) and
-`CONVERSATION_WINDOW_MINUTES` (recency window) in [`config.py`](../src/config.py).
+`CONVERSATION_WINDOW_MINUTES` (recency window) in [`config.py`](../src/finance_tracker/config.py).
 
 ## `categories`
 
@@ -76,8 +76,8 @@ with the defaults from `config.py` when a user is created.
 | `active` | `BOOLEAN NOT NULL DEFAULT TRUE` | Soft-disable instead of delete |
 | | | `UNIQUE (user_id, name, kind)` |
 
-The active expense categories are injected into the parser prompt per request by
-[`database.get_user_categories`](../src/database.py).
+The active expense categories are injected into the extraction prompts per request by
+[`database.get_user_categories`](../src/finance_tracker/storage/database.py).
 
 ## `expenses`
 
@@ -103,7 +103,7 @@ One row per parsed expense.
 ### Confidence score
 
 `confidence` is a completeness heuristic in
-[`parser._estimate_confidence`](../src/parser.py), **not** a model probability:
+[`core.confidence.estimate_confidence`](../src/finance_tracker/core/confidence.py), **not** a model probability:
 
 | Condition | Points |
 |-----------|--------|
@@ -169,7 +169,7 @@ statements.
 
 ## Common query
 
-Reports and Excel exports read through [`database.get_expenses`](../src/database.py),
+Reports and Excel exports read through [`database.get_expenses`](../src/finance_tracker/storage/database.py),
 now scoped by `user_id` and excluding soft-deleted rows:
 
 ```sql

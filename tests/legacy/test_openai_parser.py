@@ -3,11 +3,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from parser import parse_expense, _estimate_confidence, _build_system_prompt
+from finance_tracker.core.confidence import estimate_confidence
+from finance_tracker.legacy.openai_parser import parse_expense, _build_system_prompt
 
 
 class TestParseExpense:
-    @patch("parser.client")
+    @patch("finance_tracker.legacy.openai_parser.client")
     def test_parses_simple_expense(self, mock_client):
         mock_response = MagicMock()
         mock_response.choices = [
@@ -31,7 +32,7 @@ class TestParseExpense:
         assert "date" in result[0]
         assert "confidence" in result[0]
 
-    @patch("parser.client")
+    @patch("finance_tracker.legacy.openai_parser.client")
     def test_injects_user_categories_into_prompt(self, mock_client):
         mock_response = MagicMock()
         mock_response.choices = [
@@ -49,7 +50,7 @@ class TestParseExpense:
         system_content = call.kwargs["messages"][0]["content"]
         assert "mascota" in system_content
 
-    @patch("parser.client")
+    @patch("finance_tracker.legacy.openai_parser.client")
     def test_parses_expense_with_payment_method(self, mock_client):
         mock_response = MagicMock()
         mock_response.choices = [
@@ -69,7 +70,7 @@ class TestParseExpense:
         assert result[0]["amount"] == 120000
         assert result[0]["payment_method"] == "tarjeta"
 
-    @patch("parser.client")
+    @patch("finance_tracker.legacy.openai_parser.client")
     def test_parses_multiple_expenses(self, mock_client):
         mock_response = MagicMock()
         mock_response.choices = [
@@ -111,11 +112,11 @@ class TestBuildSystemPrompt:
 class TestEstimateConfidence:
     def test_full_confidence(self):
         expense = {"amount": 32000, "category": "comida", "description": "almuerzo"}
-        assert _estimate_confidence(expense) == 1.0
+        assert estimate_confidence(expense) == 1.0
 
     def test_low_confidence_unknown_category(self):
         expense = {"amount": 5000, "category": "otro", "description": "algo"}
-        assert _estimate_confidence(expense) == 0.7
+        assert estimate_confidence(expense) == 0.7
 
     def test_zero_confidence_empty(self):
-        assert _estimate_confidence({}) == 0.0
+        assert estimate_confidence({}) == 0.0
