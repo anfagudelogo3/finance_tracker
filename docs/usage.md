@@ -41,7 +41,7 @@ ways — Colombian slang like "luca"/"lukas" (thousands) is understood.
 The bot replies with a confirmation, for example:
 
 ```
-✅ Registré COP 14.000 en transporte para 2026-04-03
+💸 Gasto registrado: COP 14.000 en transporte (2026-04-03)
 ```
 
 For multiple expenses it lists each line and a total (when all share one currency).

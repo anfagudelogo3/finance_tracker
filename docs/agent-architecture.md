@@ -250,7 +250,7 @@ Input message: `"uber 14000"` from an existing user.
 // AgentResponse returned by expense_agent.handle(...)
 {
   "ok": true,
-  "reply_text": "✅ Registré COP 14.000 en transporte para 2026-08-13",
+  "reply_text": "💸 Gasto registrado: COP 14.000 en transporte (2026-08-13)",
   "reply_attachment": null,
   "data": [{"amount": 14000, "currency": "COP", "category": "transporte",
             "payment_method": null, "merchant": null, "description": "viaje en Uber",

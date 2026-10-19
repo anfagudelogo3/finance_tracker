@@ -20,7 +20,7 @@ Full documentation lives in [`docs/`](docs/README.md):
 3. **Signature verification** ensures the request is genuinely from Twilio
 4. **GPT-4o-mini** extracts structured data: amount, category, payment method, merchant
 5. **Data is saved** to PostgreSQL (Neon) — raw message + structured expense + confidence score
-6. **You get a confirmation** back on WhatsApp: `✅ Registré COP 14.000 en transporte para 2026-04-03`
+6. **You get a confirmation** back on WhatsApp: `💸 Gasto registrado: COP 14.000 en transporte (2026-04-03)`
 
 ## Tech Stack
 

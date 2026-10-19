@@ -202,8 +202,18 @@ class TestOpenAnswers:
         assert outcome.prefs["onboarding"]["draft"]["expense_renames"] == [
             ["hogar", "casa"]
         ]
-        assert outcome.replies[0].startswith("✅ Tus categorías de gastos")
         assert outcome.prefs["onboarding"]["step"] == "income_categories"
+        # One message, confirmation first: separate messages can arrive out of order
+        assert len(outcome.replies) == 1
+        confirmation, question = outcome.replies[0].split("\n\n", 1)
+        assert confirmation.startswith("✅ Tus categorías de gastos")
+        assert "mascotas" in confirmation
+        assert "*ingresos*" in question
+
+    def test_welcome_stays_its_own_message(self, db):
+        outcome = _send({}, "hola")
+        assert len(outcome.replies) == 2
+        assert outcome.replies[0] == MSG_ONBOARDING_WELCOME
 
 
 class TestCategoryChanges:
@@ -272,8 +282,10 @@ class TestFinishAndHeldMessage:
         assert db.append.call_args.kwargs["replace"] is True
         assert snapshot["onboarding"]["status"] == "done"
         assert snapshot["onboarding"]["step"] == "confirm_held"
-        assert outcome.replies[-2].startswith("🎉")
-        assert "almuerzo 20000" in outcome.replies[-1]
+        assert len(outcome.replies) == 1  # summary and held question in order
+        message = outcome.replies[0]
+        assert message.startswith("🎉")
+        assert message.index("Ya puedes escribirme") < message.index("almuerzo 20000")
 
     def test_yes_replays_the_held_message_with_its_original_timestamp(self, db):
         prefs = self._complete(db).prefs
@@ -319,7 +331,9 @@ class TestRestartAndAbandon:
 
         outcome = _send(prefs, "Reiniciar configuración")
 
-        assert outcome.replies[0] == MSG_ONBOARDING_RESTART
+        assert outcome.replies == [outcome.replies[0]]  # intro + question, one message
+        assert outcome.replies[0].startswith(MSG_ONBOARDING_RESTART)
+        assert "moneda principal" in outcome.replies[0]
         assert outcome.prefs["onboarding"]["step"] == "currency"
 
         _walk(outcome.prefs, "omitir todo")
