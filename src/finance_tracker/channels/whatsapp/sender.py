@@ -34,20 +34,24 @@ def send_document(to: str, media_url: str, filename: str) -> str:
 
 
 def format_confirmation(expenses: list[dict]) -> str:
-    """Build a human-friendly confirmation message in Spanish."""
+    """Build a human-friendly confirmation message in Spanish.
+
+    Says "Gasto" explicitly (💸) so it can't be confused with an income confirmation
+    (💰) when the router sends both in one reply.
+    """
     if len(expenses) == 1:
         expense = expenses[0]
         currency = expense.get("currency", "COP")
         amount = f"{expense['amount']:,.0f}".replace(",", ".")
         category = expense.get("category", "otro")
         expense_date = expense.get("date", "hoy")
-        msg = f"✅ Registré {currency} {amount} en {category} para {expense_date}"
+        details = expense_date
         if expense.get("payment_method"):
-            msg += f" ({expense['payment_method']})"
-        return msg
+            details += f", {expense['payment_method']}"
+        return f"💸 Gasto registrado: {currency} {amount} en {category} ({details})"
 
     # Multiple expenses: bullet list + total if same currency
-    lines = [f"✅ Registré {len(expenses)} gastos:"]
+    lines = [f"💸 Registré {len(expenses)} gastos:"]
     totals: dict[str, float] = {}
     for expense in expenses:
         currency = expense.get("currency", "COP")
@@ -68,9 +72,9 @@ def format_confirmation(expenses: list[dict]) -> str:
 def format_income_confirmation(incomes: list[dict]) -> str:
     """Build a human-friendly income confirmation message in Spanish.
 
-    Mirrors format_confirmation's shape — no payment_method suffix, since incomes
-    has no such column; "de {category}" instead of "en {category}" (received AS/FROM
-    a category, not spent ON one).
+    Mirrors format_confirmation's shape — no payment_method, since incomes has no
+    such column; "de {category}" instead of "en {category}" (received AS/FROM a
+    category, not spent ON one); "Ingreso" and 💰 so it can't be read as an expense.
     """
     if len(incomes) == 1:
         income = incomes[0]
@@ -78,10 +82,10 @@ def format_income_confirmation(incomes: list[dict]) -> str:
         amount = f"{income['amount']:,.0f}".replace(",", ".")
         category = income.get("category", "otro")
         income_date = income.get("date", "hoy")
-        return f"✅ Registré {currency} {amount} de {category} para {income_date}"
+        return f"💰 Ingreso registrado: {currency} {amount} de {category} ({income_date})"
 
     # Multiple incomes: bullet list + total if same currency
-    lines = [f"✅ Registré {len(incomes)} ingresos:"]
+    lines = [f"💰 Registré {len(incomes)} ingresos:"]
     totals: dict[str, float] = {}
     for income in incomes:
         currency = income.get("currency", "COP")

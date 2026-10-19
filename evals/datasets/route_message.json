@@ -308,7 +308,7 @@
     "profile": {"type": "personal"},
     "conversation": [
       {"role": "user", "content": "almuerzo 25000"},
-      {"role": "assistant", "content": "✅ Registré COP 25.000 en comida para 2026-06-25"}
+      {"role": "assistant", "content": "💸 Gasto registrado: COP 25.000 en comida (2026-06-25)"}
     ],
     "expected": {"route": "agents", "agents": ["expenses"]},
     "tags": ["follow-up"]
@@ -354,7 +354,7 @@
     "profile": {"type": "personal"},
     "conversation": [
       {"role": "user", "content": "almuerzo 25000"},
-      {"role": "assistant", "content": "✅ Registré COP 25.000 en comida para 2026-06-25"}
+      {"role": "assistant", "content": "💸 Gasto registrado: COP 25.000 en comida (2026-06-25)"}
     ],
     "expected": {"route": "agents", "agents": ["expenses"]},
     "tags": ["follow-up"],

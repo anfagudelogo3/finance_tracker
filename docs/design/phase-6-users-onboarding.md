@@ -47,7 +47,11 @@ later phase (roadmap Phase 8), not part of Phase 6.
    customizes them.
 5. **Income categories:** the same.
 
-Each question is a separate message. WhatsApp splits messages over ~1,600 characters.
+The welcome is its own message. After that, **each step is exactly one message**: the
+confirmation of the previous answer (e.g. "✅ Tus categorías de gastos: …") and the next
+question are joined. Separate messages sent back to back can arrive out of order on WhatsApp
+(found in testing: the income question showed up before the expense-categories
+confirmation). The longest step stays well under WhatsApp's ~1,600-character limit.
 
 **Language: Spanish only in this version.** There's no language question and no language
 setting. An English option was discussed and dropped. It would need every `MSG_*` string,

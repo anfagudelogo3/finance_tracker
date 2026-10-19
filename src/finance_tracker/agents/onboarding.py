@@ -205,9 +205,13 @@ def _start(
     }
     state["step"] = _next_step(None, state)
     prefs = _save_state(user_id, prefs, state)
-    intro = MSG_ONBOARDING_RESTART if restart else MSG_ONBOARDING_WELCOME
     logger.info("Onboarding started for user=%d (restart=%s)", user_id, restart)
-    return OnboardingOutcome(replies=[intro, _question(state)], prefs=prefs)
+    if restart:
+        return OnboardingOutcome(
+            replies=_one_message([MSG_ONBOARDING_RESTART, _question(state)]), prefs=prefs
+        )
+    # The welcome is its own message; every setup step after it is a single message
+    return OnboardingOutcome(replies=[MSG_ONBOARDING_WELCOME, _question(state)], prefs=prefs)
 
 
 def _finish(user_id, prefs, state, now, replies: list[str]) -> OnboardingOutcome:
@@ -255,7 +259,7 @@ def _finish(user_id, prefs, state, now, replies: list[str]) -> OnboardingOutcome
         replies.append(MSG_ONBOARDING_HELD.format(text=held["text"]))
     elif held and held.get("message_type") == "image":
         replies.append(MSG_ONBOARDING_HELD_IMAGE)
-    return OnboardingOutcome(replies=replies, prefs=snapshot)
+    return OnboardingOutcome(replies=_one_message(replies), prefs=snapshot)
 
 
 def _resolve_held(user_id, prefs, state, norm) -> OnboardingOutcome:
@@ -305,7 +309,7 @@ def _answer(user_id, prefs, state, text, norm, now) -> OnboardingOutcome:
         return _finish(user_id, prefs, state, now, out.texts)
 
     prefs = _save_state(user_id, prefs, state)
-    return OnboardingOutcome(replies=out.texts + [_question(state)], prefs=prefs)
+    return OnboardingOutcome(replies=_one_message(out.texts + [_question(state)]), prefs=prefs)
 
 
 def _apply_default(step: str, draft: dict) -> None:
@@ -470,6 +474,13 @@ def _default_categories(profile: dict, kind: str) -> list[str]:
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────────
+
+
+def _one_message(parts: list[str]) -> list[str]:
+    """Join a step's replies into one WhatsApp message. Separate messages sent back to
+    back can arrive out of order (e.g. the next question before the confirmation of the
+    previous answer); one message can't."""
+    return ["\n\n".join(part for part in parts if part)]
 
 
 def _norm(text: str | None) -> str:
