@@ -53,7 +53,7 @@ the `anthropic` SDK the project already uses.
 |---|---|---|
 | What it is | Your own loop over tools you define | Claude Code as a library: CLI subprocess, built-in file/bash/web tools, subagents, hooks, sessions |
 | Fit for our specialists | Exact: specialists are structured extractors writing to Postgres | Most built-ins (file edit, bash, grep) are unused and must be disabled |
-| Deployment | Unchanged: Lambda zip built by `deploy.sh` | Container image (or long-running server), writable HOME, bundled CLI |
+| Deployment | Unchanged: Lambda zip built by `scripts/deploy.py` | Container image (or long-running server), writable HOME, bundled CLI |
 | Memory | Reuses `conversation_turns` | Has its own session store (local files), which would duplicate Postgres |
 | Cost / latency per message | One small Haiku router call + the specialist call | Larger default prompt, multi-turn harness on every message |
 | Guardrail control | Every tool executor is our Python; `user_id` injected by us | Possible via hooks, but through more layers |
@@ -62,7 +62,7 @@ the `anthropic` SDK the project already uses.
 
 | Decision | Choice |
 |---|---|
-| Hosting | **AWS Lambda** (zip deploy via `scripts/deploy.sh`, unchanged) |
+| Hosting | **AWS Lambda** (zip deploy via `scripts/deploy.py`, run locally) |
 | Routing order | **Hybrid:** deterministic keyword fast paths run first (personal profiles only); the LLM router handles everything they don't resolve |
 | Framework | Agents-as-tools on the `anthropic` SDK (no Agent SDK in the request path) |
 | Specialists | Expenses, incomes, reporting, **users** |

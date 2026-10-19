@@ -83,8 +83,9 @@ uv run pytest tests/
 > **Import path note:** the application is the `finance_tracker` package in
 > `src/finance_tracker/`. `uv sync` installs it in editable mode, and pytest also has `src`
 > on its `pythonpath` (`pyproject.toml`), so `from finance_tracker… import …` works in tests.
-> On Windows, if `ZoneInfo("America/Bogota")` fails, install `tzdata`
-> (`uv run --with tzdata pytest tests/`). See [development.md](development.md#running-the-tests).
+> Windows has no system timezone database, so `tzdata` is a dev dependency (`uv sync`
+> installs it) — `ZoneInfo("America/Bogota")` works without extra steps. The Lambda runtime
+> has its own. See [development.md](development.md#running-the-tests).
 
 ## 5. Local end-to-end testing
 

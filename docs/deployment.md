@@ -7,7 +7,7 @@ deploying, and wiring the pieces together.
 ## Prerequisites
 
 - AWS account with permissions to manage Lambda, S3, and IAM
-- AWS CLI configured (`aws configure`)
+- AWS credentials for deploying (see [one-time setup](#one-time-setup-for-deploying))
 - A Twilio account with the WhatsApp Sandbox enabled
 - The database created (see [setup.md](setup.md) and [database.md](database.md))
 
@@ -28,30 +28,64 @@ aws s3 mb s3://finance-tracker-dev --region us-east-2
 Keep the bucket **private**. Excel files are shared via short-lived presigned URLs, so no
 public access is needed.
 
-## 2. Package the function
+## 2. Deploy the code (one command)
 
-[`scripts/deploy.sh`](../scripts/deploy.sh) builds a Lambda-compatible ZIP. It installs
-dependencies and the `finance_tracker` package (`src/finance_tracker/`) targeting Lambda's
-Linux x86_64 runtime, copies [`lambda/handler.py`](../lambda/handler.py) to the ZIP root
-(it re-exports `finance_tracker.handler.handler`, so the handler setting below stays
-`handler.handler`), and zips the result:
+[`scripts/deploy.py`](../scripts/deploy.py) tests, builds, uploads and smoke-tests the
+function. It runs the same on Windows, macOS and Linux (no `zip` or bash needed):
 
 ```bash
-./scripts/deploy.sh
+uv run python scripts/deploy.py                 # pytest → build → upload → wait → smoke test
+uv run python scripts/deploy.py --skip-tests    # skip pytest
+uv run python scripts/deploy.py --build-only    # only build lambda.zip, no AWS calls
+uv run python scripts/deploy.py --profile my-aws-profile
 ```
 
-This produces `lambda.zip` (gitignored). The script targets
-`x86_64-unknown-linux-gnu` / Python 3.12, so it can be run from macOS or Linux.
+Defaults: function `financeTrackerLambda`, region `us-east-2` (override with
+`--function-name` / `--region`). What it does:
 
-## 3. Deploy the code
+1. Runs `uv run pytest tests/ -q` and stops on any failure.
+2. Builds `build/` with `uv pip install .` for Lambda's runtime (`x86_64-unknown-linux-gnu`,
+   Python 3.12): the `finance_tracker` package plus its **base** dependencies only (never
+   the `dev` / `evals` groups). Copies [`lambda/handler.py`](../lambda/handler.py) to the ZIP
+   root (it re-exports `finance_tracker.handler.handler`, so the handler setting stays
+   `handler.handler`).
+3. Zips it into `lambda.zip` (~34 MB; the direct-upload limit is 50 MB).
+4. Checks the function's runtime and handler, uploads with `UpdateFunctionCode`, waits until
+   the update succeeds, and verifies the deployed `CodeSha256` matches the local zip.
+5. Sends a `GET` to the Function URL: the handler answers `405` to anything but `POST`, which
+   proves the new code imports and runs without touching Twilio, the database or an LLM.
 
-For an existing function:
+**Only the code is replaced.** Environment variables (secrets included), memory, timeout and
+the handler setting stay as configured on the function. There are no versions or aliases:
+to roll back, check out the previous commit and deploy again.
 
-```bash
-aws lambda update-function-code \
-  --function-name finance-tracker \
-  --zip-file fileb://lambda.zip
-```
+### One-time setup for deploying
+
+1. Install the AWS CLI (used only to store credentials): `winget install Amazon.AWSCLI`
+   (macOS: `brew install awscli`).
+2. Create an IAM user (or SSO permission set) for deploys with this policy — replace
+   `<ACCOUNT_ID>`:
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Sid": "DeployFinanceTrackerLambda",
+         "Effect": "Allow",
+         "Action": [
+           "lambda:GetFunctionConfiguration",
+           "lambda:UpdateFunctionCode",
+           "lambda:GetFunctionUrlConfig"
+         ],
+         "Resource": "arn:aws:lambda:us-east-2:<ACCOUNT_ID>:function:financeTrackerLambda"
+       }
+     ]
+   }
+   ```
+
+3. Create an access key for that user and run `aws configure` (region `us-east-2`), or
+   `aws configure --profile finance-tracker` and pass `--profile finance-tracker`.
 
 ### First-time function configuration
 
@@ -87,7 +121,7 @@ The Lambda execution role needs, at minimum:
 
 (`GetObject` is required for generating presigned download URLs.)
 
-## 4. Configure the Twilio webhook
+## 3. Configure the Twilio webhook
 
 In the [Twilio Console](https://console.twilio.com) → **Messaging → Try it out → Send a
 WhatsApp message → Sandbox Settings**:
@@ -98,7 +132,7 @@ WhatsApp message → Sandbox Settings**:
 
 Set the **same URL** as `WEBHOOK_URL` in the Lambda environment.
 
-## 5. Smoke test
+## 4. Smoke test
 
 From a phone joined to the Twilio sandbox and present in `ALLOWED_PHONE_NUMBERS`, send:
 

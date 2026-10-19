@@ -23,7 +23,7 @@ finance_tracker/
 ├── evals/                            # LLM evals: datasets/, scoring.py, run.py
 ├── scripts/
 │   ├── setup_db.sql          # Schema + idempotent migrations
-│   └── deploy.sh             # Build the Lambda ZIP
+│   └── deploy.py             # Test, build, upload and smoke-test the Lambda
 ├── notebooks/
 │   └── test_pipeline.ipynb   # Manual end-to-end pipeline testing
 ├── docs/                     # You are here
@@ -32,7 +32,7 @@ finance_tracker/
 ```
 
 > **Package imports:** all code lives in the `finance_tracker` package and imports
-> absolutely (`from finance_tracker.storage.database import …`). `deploy.sh` installs the
+> absolutely (`from finance_tracker.storage.database import …`). `scripts/deploy.py` installs the
 > package into the Lambda ZIP (`uv pip install .`) and copies `lambda/handler.py` to the
 > ZIP root, so the Lambda handler setting stays `handler.handler`. Don't use bare-name
 > (`from config import …`) or relative imports, and keep subpackage `__init__.py` files
