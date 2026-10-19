@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-# Put src/ on the path so evals can import parser, tracing, config, etc.
+# Put src/ on the path so evals can import the finance_tracker package.
 _src = Path(__file__).parent.parent / "src"
 if str(_src) not in sys.path:
     sys.path.insert(0, str(_src))

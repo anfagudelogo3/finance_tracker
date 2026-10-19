@@ -3,8 +3,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from handler import _handle_message
-from config import MSG_ERROR
+from finance_tracker.handler import _handle_message
+from finance_tracker.config import MSG_ERROR
 
 
 def _make_event(body: str = "almuerzo 32000", message_id: str = "SM123") -> dict:
@@ -28,15 +28,15 @@ def _tool_use_response(key: str, items: list[dict]) -> MagicMock:
 
 
 class TestExpenseTextPath:
-    @patch("expense_agent.save_expense")
-    @patch("expense_agent.get_user_categories")
-    @patch("expense_agent.client")
-    @patch("handler.send_message")
-    @patch("handler.save_turn")
-    @patch("handler.load_recent_turns")
-    @patch("handler.save_message")
-    @patch("handler.get_or_create_user")
-    @patch("handler.verify_signature")
+    @patch("finance_tracker.agents.expenses.save_expense")
+    @patch("finance_tracker.agents.expenses.get_user_categories")
+    @patch("finance_tracker.agents.expenses.client")
+    @patch("finance_tracker.handler.send_message")
+    @patch("finance_tracker.handler.save_turn")
+    @patch("finance_tracker.handler.load_recent_turns")
+    @patch("finance_tracker.handler.save_message")
+    @patch("finance_tracker.handler.get_or_create_user")
+    @patch("finance_tracker.handler.verify_signature")
     def test_text_expense_routes_through_orchestrator_and_persists(
         self,
         mock_verify,
@@ -79,15 +79,15 @@ class TestExpenseTextPath:
 
 
 class TestIncomeTextPath:
-    @patch("income_agent.save_income")
-    @patch("income_agent.get_user_categories")
-    @patch("income_agent.client")
-    @patch("handler.send_message")
-    @patch("handler.save_turn")
-    @patch("handler.load_recent_turns")
-    @patch("handler.save_message")
-    @patch("handler.get_or_create_user")
-    @patch("handler.verify_signature")
+    @patch("finance_tracker.agents.incomes.save_income")
+    @patch("finance_tracker.agents.incomes.get_user_categories")
+    @patch("finance_tracker.agents.incomes.client")
+    @patch("finance_tracker.handler.send_message")
+    @patch("finance_tracker.handler.save_turn")
+    @patch("finance_tracker.handler.load_recent_turns")
+    @patch("finance_tracker.handler.save_message")
+    @patch("finance_tracker.handler.get_or_create_user")
+    @patch("finance_tracker.handler.verify_signature")
     def test_income_text_routes_through_orchestrator_and_persists(
         self,
         mock_verify,
@@ -128,16 +128,16 @@ class TestIncomeTextPath:
 
 
 class TestExcelBypassesOrchestrator:
-    @patch("handler.orchestrator")
-    @patch("handler.send_document")
-    @patch("handler.upload_and_sign")
-    @patch("handler.create_excel_bytes")
-    @patch("handler.get_expenses")
-    @patch("handler.parse_report_request")
-    @patch("handler.save_turn")
-    @patch("handler.save_message")
-    @patch("handler.get_or_create_user")
-    @patch("handler.verify_signature")
+    @patch("finance_tracker.handler.orchestrator")
+    @patch("finance_tracker.handler.send_document")
+    @patch("finance_tracker.handler.upload_and_sign")
+    @patch("finance_tracker.handler.create_excel_bytes")
+    @patch("finance_tracker.handler.get_expenses")
+    @patch("finance_tracker.handler.parse_report_request")
+    @patch("finance_tracker.handler.save_turn")
+    @patch("finance_tracker.handler.save_message")
+    @patch("finance_tracker.handler.get_or_create_user")
+    @patch("finance_tracker.handler.verify_signature")
     def test_excel_request_does_not_reach_orchestrator(
         self,
         mock_verify,
@@ -175,13 +175,13 @@ class TestReportTextPath:
     exercises the real deterministic date-range path end to end — "resumen de mis
     gastos" needs no Claude call at all."""
 
-    @patch("reporting_agent.get_expenses")
-    @patch("handler.send_message")
-    @patch("handler.save_turn")
-    @patch("handler.load_recent_turns")
-    @patch("handler.save_message")
-    @patch("handler.get_or_create_user")
-    @patch("handler.verify_signature")
+    @patch("finance_tracker.agents.reporting.get_expenses")
+    @patch("finance_tracker.handler.send_message")
+    @patch("finance_tracker.handler.save_turn")
+    @patch("finance_tracker.handler.load_recent_turns")
+    @patch("finance_tracker.handler.save_message")
+    @patch("finance_tracker.handler.get_or_create_user")
+    @patch("finance_tracker.handler.verify_signature")
     def test_report_text_routes_through_orchestrator_to_reporting_agent(
         self,
         mock_verify,
@@ -210,14 +210,14 @@ class TestReportTextPath:
 
 
 class TestErrorContract:
-    @patch("expense_agent.get_user_categories")
-    @patch("expense_agent.client")
-    @patch("handler.send_message")
-    @patch("handler.save_turn")
-    @patch("handler.load_recent_turns")
-    @patch("handler.save_message")
-    @patch("handler.get_or_create_user")
-    @patch("handler.verify_signature")
+    @patch("finance_tracker.agents.expenses.get_user_categories")
+    @patch("finance_tracker.agents.expenses.client")
+    @patch("finance_tracker.handler.send_message")
+    @patch("finance_tracker.handler.save_turn")
+    @patch("finance_tracker.handler.load_recent_turns")
+    @patch("finance_tracker.handler.save_message")
+    @patch("finance_tracker.handler.get_or_create_user")
+    @patch("finance_tracker.handler.verify_signature")
     def test_unhandled_exception_sends_msg_error_and_returns_200(
         self,
         mock_verify,
@@ -246,12 +246,12 @@ class TestConversationHistoryWiring:
     """Direct test of the Phase 4 wiring itself, independent of any live Claude
     behavior — asserts load_recent_turns' output reaches AgentRequest.conversation."""
 
-    @patch("handler.orchestrator")
-    @patch("handler.save_turn")
-    @patch("handler.load_recent_turns")
-    @patch("handler.save_message")
-    @patch("handler.get_or_create_user")
-    @patch("handler.verify_signature")
+    @patch("finance_tracker.handler.orchestrator")
+    @patch("finance_tracker.handler.save_turn")
+    @patch("finance_tracker.handler.load_recent_turns")
+    @patch("finance_tracker.handler.save_message")
+    @patch("finance_tracker.handler.get_or_create_user")
+    @patch("finance_tracker.handler.verify_signature")
     def test_agent_request_carries_loaded_conversation_history(
         self,
         mock_verify,
@@ -281,10 +281,10 @@ class TestConversationHistoryWiring:
 
 
 class TestDuplicateMessage:
-    @patch("handler.orchestrator")
-    @patch("handler.save_message")
-    @patch("handler.get_or_create_user")
-    @patch("handler.verify_signature")
+    @patch("finance_tracker.handler.orchestrator")
+    @patch("finance_tracker.handler.save_message")
+    @patch("finance_tracker.handler.get_or_create_user")
+    @patch("finance_tracker.handler.verify_signature")
     def test_duplicate_message_short_circuits_before_orchestrator(
         self,
         mock_verify,

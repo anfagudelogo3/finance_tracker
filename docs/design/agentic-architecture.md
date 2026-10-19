@@ -41,7 +41,7 @@ domains over a shared per-user database, plus cross-domain reporting:
 | State | **Stateless** — every message independent, no memory |
 | Identity | Phone-number allowlist; **no `users` table** |
 | Data | 2 tables: `messages`, `expenses`. No incomes, no categories table (hardcoded in prompt), no budgets, no soft-delete |
-| Quality infra | 34 tests passing; eval framework (`parse_expense`, `parse_report_request`); Phoenix tracing wired (`src/tracing.py`) |
+| Quality infra | 34 tests passing; eval framework (`parse_expense`, `parse_report_request`); Phoenix tracing wired (`src/finance_tracker/observability/tracing.py`) |
 
 **The gap:** no identity, no memory, no agents, no income/budget/category model.
 

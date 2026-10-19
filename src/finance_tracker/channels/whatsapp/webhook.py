@@ -1,6 +1,6 @@
 from twilio.request_validator import RequestValidator
 
-from config import TWILIO_AUTH_TOKEN
+from finance_tracker.config import TWILIO_AUTH_TOKEN
 
 # MIME types we know how to handle, mapped to their S3 sub-prefix
 _MEDIA_TYPE_PREFIX = {

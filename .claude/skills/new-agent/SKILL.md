@@ -1,16 +1,16 @@
 ---
 name: new-agent
-description: Reusable pattern for adding a new specialist agent (income, reporting, onboarding, etc.) to this codebase's orchestrator architecture, extracted from expense_agent.py — the contract shape, Claude tool-use extraction, orchestrator wiring, test template, and eval parity comparison. Use when implementing a new src/*_agent.py module.
+description: Reusable pattern for adding a new specialist agent (income, reporting, onboarding, etc.) to this codebase's orchestrator architecture, extracted from agents/expenses.py — the contract shape, Claude tool-use extraction, orchestrator wiring, test template, and eval parity comparison. Use when implementing a new src/finance_tracker/agents/<name>.py module.
 ---
 
 # Adding a new agent
 
-This codebase has three specialist agents so far: `expense_agent.py` (Phase 1),
-`income_agent.py` (Phase 2), and `reporting_agent.py` (Phase 3) of
+This codebase has three specialist agents so far: `agents/expenses.py` (Phase 1),
+`agents/incomes.py` (Phase 2), and `agents/reporting.py` (Phase 3) of
 `docs/agent-architecture.md`. This skill extracts the patterns they established so the
 next agent follows one of them exactly instead of reinventing shape or conventions.
-`income_agent.py` is the concrete reference for what happens once a *second* agent
-exists (§3's orchestrator wiring); `reporting_agent.py` is the concrete reference for
+`agents/incomes.py` is the concrete reference for what happens once a *second* agent
+exists (§3's orchestrator wiring); `agents/reporting.py` is the concrete reference for
 the second *shape* of agent (§0) — read whichever one matches what you're building.
 
 Read `docs/agent-architecture.md` first for the full architectural context (deviations
@@ -19,22 +19,22 @@ from the original design, what's shipped vs. planned). This skill is the tactica
 
 ## 0. Two agent shapes — pick before you start
 
-**Extract-and-persist** (`expense_agent.py`, `income_agent.py`): free text → Claude
+**Extract-and-persist** (`agents/expenses.py`, `agents/incomes.py`): free text → Claude
 forced tool-use → new row(s) written to the database → confirmation reply. §§1–5 below
 are written for this shape by default.
 
-**Read-and-aggregate** (`reporting_agent.py`): free text → resolve query parameters →
+**Read-and-aggregate** (`agents/reporting.py`): free text → resolve query parameters →
 read *existing* rows → format a summary reply. **No persistence at all.** If your new
 agent reads/summarizes rather than creates records (a future budgets agent, a
 "what did I spend the most on" analysis agent, etc.), it's this shape — don't force the
-extract-and-persist template onto it. Concrete divergences `reporting_agent.py` had to
+extract-and-persist template onto it. Concrete divergences `agents/reporting.py` had to
 make, all worth checking against your own agent:
 
 - **No `save_<x>` call, ever.** `AgentResponse.data` holds the *query results* (whatever
   you read from the database) — reinterpreting that field's meaning from "persisted row
   trace" to "what this reply was built from." Nothing else about the contract changes.
 - **Claude is a fallback, not the primary path — check whether you need it at all
-  first.** `reporting_agent.py`'s core insight: date-range resolution is a small,
+  first.** `agents/reporting.py`'s core insight: date-range resolution is a small,
   enumerable set of patterns computable exactly in Python (`_resolve_deterministic`,
   zero LLM calls, zero variance) — Claude only gets called for phrasing outside that set.
   Before reaching for forced tool-use as the default (like §2 below assumes), ask
@@ -49,11 +49,11 @@ make, all worth checking against your own agent:
   being built field-by-field — the "row" is the query itself (e.g. a date range), not a
   list of extracted items.
 - **Reuses formatting/query code that predates the agent architecture entirely.**
-  `reporting_agent.py` calls `reporting.format_report` and `database.get_expenses`
+  `agents/reporting.py` calls `report_format.format_report` and `database.get_expenses`
   completely unchanged — if equivalent read/format functions already exist for your
   domain, this shape is often *less* new code than extract-and-persist, not more.
 
-## 1. The contract — `src/agent_types.py`
+## 1. The contract — `src/finance_tracker/core/agent_types.py`
 
 Every agent implements `handle(request: AgentRequest) -> AgentResponse`. Don't touch
 `agent_types.py` to add agent-specific fields — the contract is deliberately generic and
@@ -86,11 +86,11 @@ before any routing decision. Phase 2 (income) exposed why that's wrong: which ca
 `kind` applies depends on which agent ends up handling the request, decided by
 `orchestrator.py` *after* this object is already built. So each agent loads its own via
 `database.get_user_categories(request.user_id, kind="<your_kind>")` — first line inside
-`handle()`, not something the caller passes in. See `income_agent.handle()` for the real
+`handle()`, not something the caller passes in. See `agents.incomes.handle()` for the real
 example. Don't reintroduce a `categories` field on `AgentRequest` for a new agent; load it
 yourself the same way.
 
-## 2. Implementing the agent — pattern from `expense_agent.py`
+## 2. Implementing the agent — pattern from `agents/expenses.py`
 
 **Model tier:** `claude-haiku-4-5-20251001` for narrow structured extraction (matches the
 expense agent's tier — see `docs/agent-architecture.md` §2 for when Sonnet is warranted
@@ -98,13 +98,13 @@ instead, e.g. image/vision work). Add the model constant to `config.py` next to
 `CLAUDE_EXTRACTION_MODEL`, don't hardcode it in the agent module.
 
 **Extraction: forced tool-use, not prompt-described JSON.** This is the load-bearing
-pattern — it's what closes the "malformed LLM response" gap that `parser.py`'s
+pattern — it's what closes the "malformed LLM response" gap that `legacy/openai_parser.py`'s
 `json.loads(content)` (zero error handling) has. For every new agent:
 
 1. Define a tool with a JSON-schema `input_schema` matching exactly the fields you
    persist — no more, no less. If a field is dynamic per-user (categories, in expense's
    case), build the schema per-request with an `enum` constraint from the real data, the
-   same way `expense_agent._build_expense_tool(categories)` does:
+   same way `agents.expenses._build_expense_tool(categories)` does:
    ```python
    def _build_<x>_tool(categories: list[str]) -> dict:
        return {
@@ -128,7 +128,7 @@ pattern — it's what closes the "malformed LLM response" gap that `parser.py`'s
 4. Build the system prompt per-request via a `_build_system_prompt(categories)`-style
    function (not a module-level constant) if it needs to inject per-user data. Port the
    *domain rules* (field semantics, defaults, examples) from the equivalent OpenAI prompt
-   in `parser.py` if one exists — the extraction logic doesn't change with the provider,
+   in `legacy/openai_parser.py` if one exists — the extraction logic doesn't change with the provider,
    only the transport.
 
 **Reuse, don't reimplement.** Before writing any helper, check whether it already exists
@@ -137,9 +137,9 @@ and is provider-agnostic:
   `categories.kind` values already in use (`expense`, `income`) before assuming you need a
   new one, and check `config.py` for a matching `DEFAULT_<X>_CATEGORIES` list — Phase 0
   seeded both expense and income defaults already.
-- Confidence scoring → `parser._estimate_confidence` (pure heuristic, no LLM involved) —
+- Confidence scoring → `core.confidence.estimate_confidence` (pure heuristic, no LLM involved) —
   reusable as long as your fields are a subset of what it checks (`amount`/`category`/
-  `description`). `income_agent.py` reuses it unchanged despite having no
+  `description`). `agents/incomes.py` reuses it unchanged despite having no
   `payment_method`/`merchant`.
 - Persistence → the matching `database.py` function (`save_expense`, `save_income`, or add
   a sibling following the exact same signature convention: `(message_id, row: dict,
@@ -148,7 +148,7 @@ and is provider-agnostic:
   `payment_method`/`merchant`; if your table has a `source`-named column, check what it
   actually means before writing `row["source"] = request.message_type` — `expenses.source`
   is the WhatsApp channel, but `incomes.source` is the money's origin
-  (`manual`/`gmail`/`bank`), a real naming collision `income_agent.py` had to avoid by
+  (`manual`/`gmail`/`bank`), a real naming collision `agents/incomes.py` had to avoid by
   hardcoding `"manual"` instead.
 - Reply formatting → the matching `whatsapp.py` formatter (`format_confirmation`,
   `format_income_confirmation`, or add a sibling). Pure string formatting is fine for an
@@ -157,13 +157,13 @@ and is provider-agnostic:
 - Date stamping → compute `date`/`expense_date`-equivalent in Python
   (`datetime.now(ZoneInfo("America/Bogota"))`), never ask the model for "today's date."
 
-**Module-scope client:** import the shared singleton from `src/claude_client.py`
-(`from claude_client import client`) — don't instantiate a new `anthropic.Anthropic(...)`
+**Module-scope client:** import the shared singleton from `src/finance_tracker/core/claude_client.py`
+(`from finance_tracker.core.claude_client import client`) — don't instantiate a new `anthropic.Anthropic(...)`
 per agent.
 
-**Error handling:** as shipped, `expense_agent.py` has zero internal try/except — API
+**Error handling:** as shipped, `agents/expenses.py` has zero internal try/except — API
 errors, missing tool_use blocks, etc. all bubble up to `handler.py`'s top-level
-`try/except` → `MSG_ERROR` → still-200 contract, exactly like every `parser.py` OpenAI call
+`try/except` → `MSG_ERROR` → still-200 contract, exactly like every `legacy/openai_parser.py` OpenAI call
 does today. Match this unless a project-wide decision changes it (see
 `docs/agent-architecture.md`'s deviation 4) — don't add ad-hoc try/except in a new agent
 that no other agent has.
@@ -186,28 +186,30 @@ def handle(request: AgentRequest) -> AgentResponse:
     return AgentResponse(ok=True, reply_text=format_<x>_confirmation(items), data=items)
 ```
 
-## 3. Wiring into `orchestrator.py`
+## 3. Wiring into `routing/orchestrator.py`
 
 Phase 1's `orchestrator.py` was single-agent dispatch, no routing decision at all. Phase 2
 (income) is the real, concrete example of what happens once a second agent needs one —
 copy this pattern, don't design a new one:
 
 ```python
-# orchestrator.py, as of Phase 3
-from parser import _normalize, is_report_request
-
+# routing/fast_paths.py — every keyword signal lives here
 _INCOME_KEYWORDS_PHRASE = [...]   # phrase-level, see the real list for why
 
 def is_income_request(text: str) -> bool:
-    normalized = _normalize(text)
+    normalized = normalize(text)          # finance_tracker.core.text.normalize
     return any(kw in normalized for kw in _INCOME_KEYWORDS_PHRASE)
+
+# routing/orchestrator.py, as of Phase 4
+from finance_tracker.agents import expenses, incomes, reporting
+from finance_tracker.routing.fast_paths import is_income_request, is_report_request
 
 def handle_message(request: AgentRequest) -> AgentResponse:
     if is_report_request(request.text):
-        return reporting_agent.handle(request)
+        return reporting.handle(request)
     if is_income_request(request.text):
-        return income_agent.handle(request)
-    return expense_agent.handle(request)
+        return incomes.handle(request)
+    return expenses.handle(request)
 ```
 
 **Priority order matters and isn't arbitrary.** Report is checked first because it can
@@ -218,18 +220,17 @@ When adding a new deterministic signal, think through whether it can co-occur wi
 existing one in a message that should route to the *new* signal's agent, and order
 accordingly — don't just append your check at the end by default.
 
-**`reporting_agent`'s dispatch trigger wasn't newly written in `orchestrator.py` at
-all** — `is_report_request` already existed in `parser.py` (it used to gate an inline
+**`agents.reporting`'s dispatch trigger wasn't newly written in `orchestrator.py` at
+all** — `is_report_request` already existed in the old `legacy/openai_parser.py` (now `routing/fast_paths.py`) (it used to gate an inline
 branch in `handler.py`, pre-orchestrator) and was reused unchanged. Check whether your
 new agent's routing signal already exists somewhere as a keyword function before writing
 a new one — this was true for report, not for income.
 
 **A routing signal has to come from somewhere. Options, cheapest first:**
 1. **Deterministic/keyword signal**, if one exists — this is what income used.
-   `is_income_request` lives in `orchestrator.py` itself (not `parser.py`): `parser.py`
-   owns intent routing for what `handler.py` dispatches (`is_excel_request`/
-   `is_report_request`, evaluated before the orchestrator is ever called);
-   `orchestrator.py` now owns it for what *it* dispatches. Reuse `parser._normalize` (the
+   Add it to `routing/fast_paths.py`, next to `is_excel_request` / `is_report_request` /
+   `is_income_request` — all keyword signals live in that one module, whether
+   `handler.py` or `orchestrator.py` calls them. Reuse `core.text.normalize` (the
    accent-stripping helper) rather than duplicating it.
    - If the new domain's vocabulary can collide with an existing agent's (income vs.
      expense: "pagué" = I paid, vs. "me pagaron" = I was paid — shared stem), use
@@ -250,7 +251,7 @@ Whichever it is, keep `handler.py` — not `orchestrator.py` — doing the actua
 `whatsapp.send_message`/`send_document` call, matching the current deviation 3 (revisit
 only when the orchestrator owns every branch, not one at a time).
 
-## 4. Tests — template from `tests/test_expense_agent.py`
+## 4. Tests — template from `tests/agents/test_expenses.py`
 
 For the agent module itself, one test file per agent:
 
@@ -263,7 +264,7 @@ For the agent module itself, one test file per agent:
 - A `_request(text)` helper building a valid `AgentRequest` (no `categories` param — it's
   not a field; set the desired categories via the `get_user_categories` mock's
   `return_value` instead).
-- Minimum coverage, mirroring `TestHandle` in `test_expense_agent.py`/`test_income_agent.py`:
+- Minimum coverage, mirroring `TestHandle` in `tests/agents/test_expenses.py`/`tests/agents/test_incomes.py`:
   - simple single-item parse
   - a case exercising a field expense has that your domain might not (a nullable field,
     or — if your fields don't have one, like income's — a non-default category/currency
@@ -276,7 +277,7 @@ For the agent module itself, one test file per agent:
     `get_user_categories` was called with the right `kind`, and assert `tool_choice` is
     the forced form, not left optional.
 
-For the orchestrator dispatch, extend `tests/test_orchestrator.py`'s pattern — patch the
+For the orchestrator dispatch, extend `tests/routing/test_orchestrator.py`'s pattern — patch the
 new agent module, assert `handle_message` reaches it under the right routing condition.
 
 For `handler.py` wiring, extend `tests/test_handler.py`: at minimum, a test that the new
@@ -327,7 +328,7 @@ from `_run_scored_dataset`/`_run_parse_expense`/`_run_expense_agent`/`_run_incom
 
 **If your agent isn't expense-shaped** (a read-and-aggregate agent, or any output shape
 `score_expense` doesn't fit), don't force it through `_run_scored_dataset` — write a
-sibling pair the same way `reporting_agent` did: `evals/scoring.py`'s `score_date_range`
+sibling pair the same way `agents.reporting` did: `evals/scoring.py`'s `score_date_range`
 already existed for `{min_date, max_date}` output, so a parallel
 `_run_date_range_dataset(dataset_name, resolve_fn)` was added next to
 `_run_scored_dataset`, same shared-helper principle, different scoring function. Reuse
@@ -336,7 +337,7 @@ range (a future budgets or analytics agent might); write a new scorer + runner p
 if the output shape is genuinely new, not just to avoid a two-line addition to an
 existing one.
 
-## Checklist for a new `<x>_agent.py`
+## Checklist for a new `agents/<x>.py`
 
 First: which shape is this (§0)? The checklist below is written for extract-and-persist;
 skip the persistence-specific items (marked) for a read-and-aggregate agent.
@@ -348,8 +349,8 @@ skip the persistence-specific items (marked) for a read-and-aggregate agent.
       (check `scripts/setup_db.sql`); *(read-and-aggregate)* reuse the existing
       `get_<x>`/format function instead — don't write a new persistence function
 - [ ] `whatsapp.py`: `format_<x>_confirmation` if the reply shape differs from an
-      existing formatter (`reporting.format_report` was reused unchanged for reporting)
-- [ ] `<x>_agent.py`: forced tool-use extraction (primary, or fallback-only per §0),
+      existing formatter (`report_format.format_report` was reused unchanged for reporting)
+- [ ] `agents/<x>.py`: forced tool-use extraction (primary, or fallback-only per §0),
       `handle()`, zero internal try/except; *(extract-and-persist)* reuse
       `_estimate_confidence` and date-stamp in Python
 - [ ] `orchestrator.py`: wire in dispatch — deterministic signal first, checked in the
@@ -357,7 +358,7 @@ skip the persistence-specific items (marked) for a read-and-aggregate agent.
       only if genuinely needed
 - [ ] `handler.py`: route the relevant message path through the orchestrator; leave
       unrelated branches untouched
-- [ ] `tests/test_<x>_agent.py`, extend `test_orchestrator.py` and `test_handler.py`
+- [ ] `tests/agents/test_<x>.py`, extend `tests/routing/test_orchestrator.py` and `test_handler.py`
 - [ ] `evals/run.py`: shared dataset-runner helper (`_run_scored_dataset` for
       expense-shaped output, `_run_date_range_dataset` for date-range output, or a new
       pair if the shape is genuinely new), `_run_<x>_agent`, key-gated section,

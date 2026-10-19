@@ -2,7 +2,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from database import (
+from finance_tracker.storage.database import (
     save_message,
     save_expense,
     get_or_create_user,
@@ -27,7 +27,7 @@ def _mock_connection(mock_get_conn, row_id=1):
 
 
 class TestSaveMessage:
-    @patch("database.get_connection")
+    @patch("finance_tracker.storage.database.get_connection")
     def test_saves_and_returns_id(self, mock_get_conn):
         mock_cursor = _mock_connection(mock_get_conn, 1)
 
@@ -41,7 +41,7 @@ class TestSaveMessage:
         assert result == 1
         mock_cursor.execute.assert_called_once()
 
-    @patch("database.get_connection")
+    @patch("finance_tracker.storage.database.get_connection")
     def test_returns_none_on_duplicate(self, mock_get_conn):
         mock_cursor = _mock_connection(mock_get_conn, 1)
         mock_cursor.fetchone.return_value = None  # ON CONFLICT DO NOTHING returns no row
@@ -57,7 +57,7 @@ class TestSaveMessage:
 
 
 class TestSaveExpense:
-    @patch("database.get_connection")
+    @patch("finance_tracker.storage.database.get_connection")
     def test_saves_and_returns_id(self, mock_get_conn):
         mock_cursor = _mock_connection(mock_get_conn, 1)
 
@@ -79,7 +79,7 @@ class TestSaveExpense:
 
 
 class TestGetOrCreateUser:
-    @patch("database.get_connection")
+    @patch("finance_tracker.storage.database.get_connection")
     def test_creates_new_user_and_seeds_categories(self, mock_get_conn):
         mock_cursor = _mock_connection(mock_get_conn, 42)  # INSERT RETURNING id
 
@@ -89,7 +89,7 @@ class TestGetOrCreateUser:
         # New user → categories seeded via executemany
         mock_cursor.executemany.assert_called_once()
 
-    @patch("database.get_connection")
+    @patch("finance_tracker.storage.database.get_connection")
     def test_returns_existing_user_without_seeding(self, mock_get_conn):
         mock_cursor = _mock_connection(mock_get_conn)
         # First fetchone (INSERT) → None (conflict), second (SELECT) → existing id
@@ -102,7 +102,7 @@ class TestGetOrCreateUser:
 
 
 class TestGetUserCategories:
-    @patch("database.get_connection")
+    @patch("finance_tracker.storage.database.get_connection")
     def test_returns_user_category_names(self, mock_get_conn):
         mock_cursor = _mock_connection(mock_get_conn)
         mock_cursor.fetchall.return_value = [{"name": "comida"}, {"name": "transporte"}]
@@ -111,7 +111,7 @@ class TestGetUserCategories:
 
         assert result == ["comida", "transporte"]
 
-    @patch("database.get_connection")
+    @patch("finance_tracker.storage.database.get_connection")
     def test_falls_back_to_defaults_when_empty(self, mock_get_conn):
         mock_cursor = _mock_connection(mock_get_conn)
         mock_cursor.fetchall.return_value = []
@@ -120,7 +120,7 @@ class TestGetUserCategories:
 
         assert "comida" in result and "otro" in result  # default expense set
 
-    @patch("database.get_connection")
+    @patch("finance_tracker.storage.database.get_connection")
     def test_income_fallback_uses_income_defaults(self, mock_get_conn):
         mock_cursor = _mock_connection(mock_get_conn)
         mock_cursor.fetchall.return_value = []
@@ -131,7 +131,7 @@ class TestGetUserCategories:
 
 
 class TestConversationMemory:
-    @patch("database.get_connection")
+    @patch("finance_tracker.storage.database.get_connection")
     def test_save_turn_executes_insert(self, mock_get_conn):
         mock_cursor = _mock_connection(mock_get_conn)
 
@@ -139,7 +139,7 @@ class TestConversationMemory:
 
         mock_cursor.execute.assert_called_once()
 
-    @patch("database.get_connection")
+    @patch("finance_tracker.storage.database.get_connection")
     def test_load_recent_turns_returns_chronological(self, mock_get_conn):
         mock_cursor = _mock_connection(mock_get_conn)
         # DB returns newest-first; function should reverse to oldest-first

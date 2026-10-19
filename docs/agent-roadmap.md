@@ -16,9 +16,9 @@ router-driven, conversational multi-agent system.
 | Identity from the Twilio-verified phone | `database.get_or_create_user` |
 | Per-user categories (data, not prompt constants) | `categories` table, `database.get_user_categories` |
 | Short-term memory (8 turns / 30 min) | `conversation_turns`, `database.save_turn` / `load_recent_turns` |
-| Agent contract | `src/agent_types.py` — `AgentRequest` / `AgentResponse`, `handle(request) -> response` |
-| Dispatch | `src/orchestrator.py` — deterministic keywords: report → income → expense default |
-| Specialists | `src/expense_agent.py`, `src/income_agent.py`, `src/reporting_agent.py` (Claude Haiku, forced tool-use) |
+| Agent contract | `src/finance_tracker/core/agent_types.py` — `AgentRequest` / `AgentResponse`, `handle(request) -> response` |
+| Dispatch | `src/finance_tracker/routing/orchestrator.py` — deterministic keywords: report → income → expense default |
+| Specialists | `src/finance_tracker/agents/expenses.py`, `src/finance_tracker/agents/incomes.py`, `src/finance_tracker/agents/reporting.py` (Claude Haiku, forced tool-use) |
 
 ### What's missing
 
@@ -53,7 +53,7 @@ the `anthropic` SDK the project already uses.
 |---|---|---|
 | What it is | Your own loop over tools you define | Claude Code as a library: CLI subprocess, built-in file/bash/web tools, subagents, hooks, sessions |
 | Fit for our specialists | Exact: specialists are structured extractors writing to Postgres | Most built-ins (file edit, bash, grep) are unused and must be disabled |
-| Deployment | Unchanged: Lambda zip, `deploy.sh`, flat imports | Container image (or long-running server), writable HOME, bundled CLI |
+| Deployment | Unchanged: Lambda zip built by `deploy.sh` | Container image (or long-running server), writable HOME, bundled CLI |
 | Memory | Reuses `conversation_turns` | Has its own session store (local files), which would duplicate Postgres |
 | Cost / latency per message | One small Haiku router call + the specialist call | Larger default prompt, multi-turn harness on every message |
 | Guardrail control | Every tool executor is our Python; `user_id` injected by us | Possible via hooks, but through more layers |
@@ -100,7 +100,7 @@ WhatsApp ─► Twilio ─► handler.py  (UNCHANGED: signature verify → allow
  delegate_to_ delegate_to_ delegate_to_ delegate_to_ decline_out_of_scope ask_clarification
   expenses     incomes      reporting    users
      │            │            │            │
- expense_agent income_agent reporting_agent users_agent   (handle(AgentRequest))
+ agents.expenses agents.incomes agents.reporting agents.users   (handle(AgentRequest))
      └────────────┴────────────┴────────────┘
                          │ tool_results
                          ▼
@@ -121,10 +121,10 @@ runs inside the existing Lambda.
 
 | Tool | Input | Executor |
 |---|---|---|
-| `delegate_to_expenses` | `{task: str}` | `expense_agent.handle(child_request)` |
-| `delegate_to_incomes` | `{task: str}` | `income_agent.handle(child_request)` |
-| `delegate_to_reporting` | `{task: str}` | `reporting_agent.handle(child_request)` |
-| `delegate_to_users` | `{task: str}` | `users_agent.handle(child_request)` (from Phase 6, §5.2) |
+| `delegate_to_expenses` | `{task: str}` | `agents.expenses.handle(child_request)` |
+| `delegate_to_incomes` | `{task: str}` | `agents.incomes.handle(child_request)` |
+| `delegate_to_reporting` | `{task: str}` | `agents.reporting.handle(child_request)` |
+| `delegate_to_users` | `{task: str}` | `agents.users.handle(child_request)` (from Phase 6, §5.2) |
 | `decline_out_of_scope` | `{reason: str}` | returns `config.MSG_OUT_OF_SCOPE` |
 | `ask_clarification` | `{question: str}` | returns the question as the reply (no write) |
 
@@ -147,7 +147,7 @@ plus one executor entry.
 - The router receives the bounded history from `load_recent_turns` so it can resolve follow-ups.
   Specialists keep receiving it through `AgentRequest.conversation`.
 
-### 4.3 Agent loop semantics (`src/agent_loop.py::run_tool_loop`)
+### 4.3 Agent loop semantics (`core/agent_loop.py::run_tool_loop`)
 
 This is a shared helper. The router uses it from Phase 5, and any specialist that becomes
 multi-step (the users agent in Phase 6, corrections in Phase 8) will use it too. Today's
@@ -321,7 +321,7 @@ Other keys that live next to `profile` in `users.prefs`:
 }
 ```
 
-### 5.2 Users agent (`src/users_agent.py`)
+### 5.2 Users agent (`agents/users.py`)
 
 A specialist like the other three (`handle(AgentRequest) -> AgentResponse`), reached through
 `delegate_to_users`. It's a separate agent rather than tools on the router because:
@@ -363,7 +363,7 @@ next message.
   executor, never from the model, like every other tool.
 - Names are validated: no duplicates per `kind`, reasonable length, normalized casing.
 
-### 5.3 Onboarding (`src/onboarding.py`)
+### 5.3 Onboarding (`agents/onboarding.py`)
 
 The first-time questions are a **fixed, deterministic flow**, not an open-ended LLM chat. That
 keeps it predictable, cheap and testable.
@@ -408,7 +408,7 @@ latency, tokens and cost per message.
 
 ### Phase 5 — Router agent (agents-as-tools), profile-aware
 
-- New: `src/agent_loop.py` (§4.3) and `src/router_agent.py` (tools + executors, §4.1–4.2).
+- New: `core/agent_loop.py` (§4.3) and `routing/router_agent.py` (tools + executors, §4.1–4.2).
 - `orchestrator.handle_message`: keep the fast paths (narrowed per §4.6, `personal` only), add
   the simple-expense heuristic, and send everything else to `router_agent.route`.
 - Multi-intent delegation, `decline_out_of_scope` and `ask_clarification`.
@@ -420,17 +420,17 @@ latency, tokens and cost per message.
 - **Evals:** `evals/datasets/route_message.json` with a `profile` per case (§4.6), scored by
   `score_routing`; the router runs with specialists stubbed. Thresholds set from the first live
   run, including per-profile accuracy.
-- **Tests:** `tests/test_agent_loop.py` with mocked Claude sequences covering:
+- **Tests:** `tests/core/test_agent_loop.py` with mocked Claude sequences covering:
   tool_use → tool_use → end_turn; reaching `max_iterations`; `max_tokens` with a partial
   tool_use; refusal; timeout; a specialist raising (→ `is_error` result, loop continues).
-  Also `tests/test_router_agent.py` for executor wiring, the `user_id` injection invariant, and
+  Also `tests/routing/test_router_agent.py` for executor wiring, the `user_id` injection invariant, and
   "business profile never uses the fast paths".
 - **Exit:** routing eval above threshold for both profiles; existing expense/income/report evals
   unchanged; Phoenix shows router → specialist spans.
 
 ### Phase 6 — Users agent + onboarding
 
-- New: `src/users_agent.py` (§5.2), `src/onboarding.py` (§5.3); `delegate_to_users` added to the
+- New: `agents/users.py` (§5.2), `agents/onboarding.py` (§5.3); `delegate_to_users` added to the
   router.
 - `database.py`: settings functions scoped by `user_id` (update prefs, add / rename / merge /
   deactivate / reactivate category). Rename and merge update `expenses`/`incomes` rows in one
@@ -499,7 +499,7 @@ latency, tokens and cost per message.
   measure the cost before routing more traffic through the LLM.
 - **Model refresh:** specialists and the router are on the Haiku tier. Re-run all evals before
   switching model versions.
-- **Excel** still uses `parser.parse_report_request` (OpenAI) and doesn't share
+- **Excel** still uses `legacy.openai_parser.parse_report_request` (OpenAI) and doesn't share
   `reporting_agent`'s deterministic date resolution.
 - **Proactive messages** (budget alerts, summaries) require WhatsApp templates outside the 24 h
   window. See [design/open-challenges.md](design/open-challenges.md), Challenge 1.

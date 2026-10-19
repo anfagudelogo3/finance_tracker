@@ -18,8 +18,8 @@ two key prefixes:
 
 | Prefix | Contents | Written by |
 |--------|----------|------------|
-| `incoming/whatsapp/{audio\|images\|other}/{phone}/{MessageSid}.{ext}` | Archived inbound media | [`media.py`](../src/media.py) |
-| `processed/whatsapp/{phone}/{timestamp}_{min}_{max}.xlsx` | Generated Excel exports | [`excel.py`](../src/excel.py) |
+| `incoming/whatsapp/{audio\|images\|other}/{phone}/{MessageSid}.{ext}` | Archived inbound media | [`media.py`](../src/finance_tracker/storage/media.py) |
+| `processed/whatsapp/{phone}/{timestamp}_{min}_{max}.xlsx` | Generated Excel exports | [`excel.py`](../src/finance_tracker/storage/excel.py) |
 
 ```bash
 aws s3 mb s3://finance-tracker-dev --region us-east-2
@@ -31,8 +31,10 @@ public access is needed.
 ## 2. Package the function
 
 [`scripts/deploy.sh`](../scripts/deploy.sh) builds a Lambda-compatible ZIP. It installs
-dependencies targeting Lambda's Linux x86_64 runtime, copies the `src/` modules in at the
-top level, and zips the result:
+dependencies and the `finance_tracker` package (`src/finance_tracker/`) targeting Lambda's
+Linux x86_64 runtime, copies [`lambda/handler.py`](../lambda/handler.py) to the ZIP root
+(it re-exports `finance_tracker.handler.handler`, so the handler setting below stays
+`handler.handler`), and zips the result:
 
 ```bash
 ./scripts/deploy.sh
@@ -111,7 +113,7 @@ Twilio SIDs).
 ## Security
 
 - **Signature verification** — every inbound `POST` is validated against Twilio's HMAC
-  ([`webhook.verify_signature`](../src/webhook.py)); failures return `401`.
+  ([`webhook.verify_signature`](../src/finance_tracker/channels/whatsapp/webhook.py)); failures return `401`.
 - **Phone allowlist** — only senders in `ALLOWED_PHONE_NUMBERS` are processed; others are
   silently dropped.
 - **No secrets in code** — all credentials come from environment variables.

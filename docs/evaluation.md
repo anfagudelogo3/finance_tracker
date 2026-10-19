@@ -299,7 +299,7 @@ browse at any time.
 
 ### How it is wired in
 
-**[`src/tracing.py`](../src/tracing.py)** contains a single `setup_tracing()` function.
+**[`src/finance_tracker/observability/tracing.py`](../src/finance_tracker/observability/tracing.py)** contains a single `setup_tracing()` function.
 When called, it:
 
 1. Checks whether `PHOENIX_TRACING=1` or `PHOENIX_COLLECTOR_ENDPOINT` is set in the
@@ -311,10 +311,10 @@ When called, it:
 4. Calls `OpenAIInstrumentor().instrument()`, which monkey-patches the OpenAI SDK at the
    class level. From that point on, every `client.chat.completions.create(...)` and
    `client.audio.transcriptions.create(...)` call anywhere in the codebase is
-   automatically intercepted and traced — no changes needed in `parser.py`.
+   automatically intercepted and traced — no changes needed in `legacy/openai_parser.py` or the agents.
 
-**[`src/handler.py`](../src/handler.py)** calls `setup_tracing()` at module load time,
-before `parser.py` is imported. This ensures the OpenAI class is patched before the
+**[`src/finance_tracker/handler.py`](../src/finance_tracker/handler.py)** calls `setup_tracing()` at module load time,
+before `legacy/openai_parser.py` or any agent is imported. This ensures the OpenAI class is patched before the
 `client = OpenAI(...)` instance is created.
 
 **[`evals/run.py`](../evals/run.py)** also calls `setup_tracing()` before making any

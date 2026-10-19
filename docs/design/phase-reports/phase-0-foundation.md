@@ -15,22 +15,22 @@ the user experiences. See [agentic-architecture.md](../agentic-architecture.md).
 - `incomes` and `budgets` are created now but exercised by later phases (2 and 3)
 - A commented RESET block at the top (existing data is disposable)
 
-**Config** ([`src/config.py`](../../../src/config.py)):
+**Config** ([`src/finance_tracker/config.py`](../../../src/finance_tracker/config.py)):
 - `DEFAULT_EXPENSE_CATEGORIES`, `DEFAULT_INCOME_CATEGORIES` (seeded per new user)
 - `CONVERSATION_MAX_TURNS` (8), `CONVERSATION_WINDOW_MINUTES` (30) — the memory window knobs
 
-**Database** ([`src/database.py`](../../../src/database.py)):
+**Database** ([`src/finance_tracker/storage/database.py`](../../../src/finance_tracker/storage/database.py)):
 - `get_or_create_user(phone)` — auto-provisions a user + seeds default categories on first contact
 - `get_user_categories(user_id, kind)` — categories-as-data, with default fallback
 - `save_turn` / `load_recent_turns` — conversation memory store (time-windowed, capped, returned chronological)
 - `save_message`, `save_expense`, `get_expenses` now scoped by `user_id`; `get_expenses` excludes soft-deleted rows
 
-**Parser** ([`src/parser.py`](../../../src/parser.py)):
+**Parser** ([`src/finance_tracker/legacy/openai_parser.py`](../../../src/finance_tracker/legacy/openai_parser.py)):
 - `SYSTEM_PROMPT` constant replaced by `_build_system_prompt(categories)` — the user's
   categories are injected per request; `parse_expense` / `parse_expense_from_image` accept
   an optional `categories` argument (defaults preserve old behavior)
 
-**Handler** ([`src/handler.py`](../../../src/handler.py)):
+**Handler** ([`src/finance_tracker/handler.py`](../../../src/finance_tracker/handler.py)):
 - Resolves `user_id` from the verified phone (the **hard guardrail** — the LLM never
   chooses the account)
 - Threads `user_id` through saves and reads

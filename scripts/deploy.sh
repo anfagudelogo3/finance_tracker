@@ -6,11 +6,13 @@ echo "📦 Packaging Lambda function..."
 # Clean previous build
 rm -rf build/ lambda.zip
 
-# Install dependencies into build/ targeting Lambda's Linux x86_64 runtime
+# Install dependencies AND the finance_tracker package (src/finance_tracker) into
+# build/, targeting Lambda's Linux x86_64 runtime. Base dependencies only — the
+# dev/evals dependency groups are never installed here.
 uv pip install . --target build/ --python-platform x86_64-unknown-linux-gnu --python 3.12 --quiet
 
-# Copy source code
-cp src/*.py build/
+# Lambda entry point at the zip root, so the handler setting stays handler.handler
+cp lambda/handler.py build/handler.py
 
 # Create ZIP
 cd build

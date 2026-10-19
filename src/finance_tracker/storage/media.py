@@ -3,7 +3,7 @@ import logging
 import boto3
 import requests
 
-from config import S3_BUCKET_NAME, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
+from finance_tracker.config import S3_BUCKET_NAME, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
 
 logger = logging.getLogger(__name__)
 

@@ -2,16 +2,16 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from agent_types import AgentRequest, AgentResponse
-from claude_client import client
-from config import (
+from finance_tracker.core.agent_types import AgentRequest, AgentResponse
+from finance_tracker.core.claude_client import client
+from finance_tracker.config import (
     CLAUDE_EXTRACTION_MODEL,
     DEFAULT_EXPENSE_CATEGORIES,
     MSG_EMPTY_EXPENSE,
 )
-from database import get_user_categories, save_expense
-from parser import _estimate_confidence
-from whatsapp import format_confirmation
+from finance_tracker.storage.database import get_user_categories, save_expense
+from finance_tracker.core.confidence import estimate_confidence
+from finance_tracker.channels.whatsapp.sender import format_confirmation
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ _BOGOTA = ZoneInfo("America/Bogota")
 
 
 def _build_system_prompt(categories: list[str]) -> str:
-    """Field-extraction rules ported from parser.py's prompt — same domain logic,
+    """Field-extraction rules ported from legacy/openai_parser.py's prompt — same domain logic,
     just no JSON-shape instructions since the record_expenses tool enforces that."""
     cats = ", ".join(categories)
     return f"""You are a personal finance assistant that extracts expense data from short text messages in Spanish or English.
@@ -53,7 +53,7 @@ Query: "gracias"
 
 
 def _build_expense_tool(categories: list[str]) -> dict:
-    """Tool schema enforcing the same field shape parser.py's prompt-described JSON
+    """Tool schema enforcing the same field shape legacy/openai_parser.py's prompt-described JSON
     used, but schema-validated by the API instead of trusted to json.loads."""
     return {
         "name": "record_expenses",
@@ -109,7 +109,7 @@ def _build_expense_tool(categories: list[str]) -> dict:
 
 def _extract(text: str, categories: list[str]) -> list[dict]:
     """Call Claude with a forced tool call so the response is schema-validated by the
-    API rather than trusted to json.loads (today's parser.py has no error handling
+    API rather than trusted to json.loads (today's legacy/openai_parser.py has no error handling
     around that parse — this closes that gap)."""
     cats = categories or DEFAULT_EXPENSE_CATEGORIES
     logger.info("Calling Claude to parse: %s", text)
@@ -138,7 +138,7 @@ def handle(request: AgentRequest) -> AgentResponse:
     today = datetime.now(_BOGOTA).date().isoformat()
     for expense in expenses:
         expense["date"] = today
-        expense["confidence"] = _estimate_confidence(expense)
+        expense["confidence"] = estimate_confidence(expense)
         expense["source"] = request.message_type
         expense["expense_id"] = save_expense(
             request.message_id, expense, request.user_id

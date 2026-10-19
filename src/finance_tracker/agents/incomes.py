@@ -2,12 +2,12 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from agent_types import AgentRequest, AgentResponse
-from claude_client import client
-from config import CLAUDE_EXTRACTION_MODEL, DEFAULT_INCOME_CATEGORIES, MSG_EMPTY_INCOME
-from database import get_user_categories, save_income
-from parser import _estimate_confidence
-from whatsapp import format_income_confirmation
+from finance_tracker.core.agent_types import AgentRequest, AgentResponse
+from finance_tracker.core.claude_client import client
+from finance_tracker.config import CLAUDE_EXTRACTION_MODEL, DEFAULT_INCOME_CATEGORIES, MSG_EMPTY_INCOME
+from finance_tracker.storage.database import get_user_categories, save_income
+from finance_tracker.core.confidence import estimate_confidence
+from finance_tracker.channels.whatsapp.sender import format_income_confirmation
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ def _build_income_tool(categories: list[str]) -> dict:
 
 
 def _extract(text: str, categories: list[str]) -> list[dict]:
-    """Forced tool-use call, same pattern as expense_agent._extract."""
+    """Forced tool-use call, same pattern as agents.expenses._extract."""
     cats = categories or DEFAULT_INCOME_CATEGORIES
     logger.info("Calling Claude to parse income: %s", text)
     response = client.messages.create(
@@ -116,7 +116,7 @@ def handle(request: AgentRequest) -> AgentResponse:
     today = datetime.now(_BOGOTA).date().isoformat()
     for income in incomes:
         income["date"] = today
-        income["confidence"] = _estimate_confidence(income)
+        income["confidence"] = estimate_confidence(income)
         # incomes.source means the money's origin ('manual'|'gmail'|'bank'), not the
         # WhatsApp channel — every Phase 2 income arrives as a typed/spoken message.
         income["source"] = "manual"
