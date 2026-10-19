@@ -208,7 +208,7 @@ uv sync --group evals
 
 This installs `arize-phoenix` and `openinference-instrumentation-openai` into the
 virtual environment. These packages are kept in a separate dependency group and are
-never bundled into the Lambda ZIP — `deploy.sh` only installs the base project
+never bundled into the Lambda ZIP — `scripts/deploy.py` only installs the base project
 dependencies.
 
 **2. Set a real OpenAI API key in `.env`:**
@@ -338,7 +338,7 @@ API calls, so eval runs appear in Phoenix alongside real production traces.
 
 Because `setup_tracing()` is a no-op when the env vars are absent, **the production
 Lambda is completely unaffected** even though Phoenix is not installed in the Lambda
-package. `deploy.sh` uses `uv pip install .` which only installs base project
+package. `scripts/deploy.py` uses `uv pip install .` which only installs base project
 dependencies, never the `evals` group.
 
 ### Trace persistence

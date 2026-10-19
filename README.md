@@ -53,7 +53,7 @@ evals/                        # LLM evals: datasets/, scoring.py, run.py
 notebooks/
 └── test_pipeline.ipynb  # Local testing without WhatsApp/Lambda
 scripts/
-├── deploy.sh       # Package and deploy ZIP to Lambda (Linux x86_64 compatible)
+├── deploy.py       # Test, build, upload and smoke-test the Lambda (one command)
 └── setup_db.sql    # Database schema creation
 ```
 
@@ -124,8 +124,7 @@ Open `notebooks/test_pipeline.ipynb` to test the full pipeline (parse → save �
 ### 7. Deploy to Lambda
 
 ```bash
-./scripts/deploy.sh
-aws lambda update-function-code --function-name finance-tracker --zip-file fileb://lambda.zip
+uv run python scripts/deploy.py   # see docs/deployment.md for the one-time AWS setup
 ```
 
 Lambda configuration:
