@@ -63,7 +63,7 @@ All application code lives in the [`finance_tracker`](../src/finance_tracker) pa
 | Module | Responsibility |
 |--------|----------------|
 | [`handler.py`](../src/finance_tracker/handler.py) | Lambda handler; runs the pipeline and picks the branch (Excel / report / image / text-audio) |
-| [`config.py`](../src/finance_tracker/config.py) | Load all configuration from environment variables; tunable constants and reply strings |
+| [`config.py`](../src/finance_tracker/config.py) | Load all configuration from environment variables (filled from SSM Parameter Store at cold start in the Lambda, via `core/ssm_config.py`); tunable constants and reply strings |
 | [`core/agent_types.py`](../src/finance_tracker/core/agent_types.py) | `AgentRequest` / `AgentResponse`, the contract every agent implements (incl. the user `profile`) |
 | [`core/agent_loop.py`](../src/finance_tracker/core/agent_loop.py) | Claude tool-use loop: runs until `end_turn`; max iterations / timeout as safeguards |
 | [`core/claude_client.py`](../src/finance_tracker/core/claude_client.py) | Anthropic client singleton |

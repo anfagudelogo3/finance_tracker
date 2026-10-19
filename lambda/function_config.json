@@ -1,0 +1,12 @@
+{
+  "Runtime": "python3.12",
+  "Handler": "handler.handler",
+  "Timeout": 20,
+  "MemorySize": 150,
+  "EphemeralStorage": {"Size": 512},
+  "Environment": {
+    "Variables": {
+      "CONFIG_SSM_PATH": "/finance-tracker/prod"
+    }
+  }
+}

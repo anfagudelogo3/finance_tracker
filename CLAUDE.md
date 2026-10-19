@@ -22,7 +22,8 @@ uv run python -m evals.run                 # LLM evals — makes LIVE OpenAI cal
 uv run python -m evals.run --check         # exit 1 if any metric is under threshold (CI gate)
 uv run --group evals python scripts/start_phoenix.py   # trace UI at localhost:6006
 
-uv run python scripts/deploy.py            # test → build lambda.zip → upload to financeTrackerLambda (us-east-2) → smoke test
+uv run python scripts/deploy.py            # test → build → upload code → apply lambda/function_config.json → smoke test (financeTrackerLambda, us-east-2)
+uv run python scripts/sync_ssm_params.py --profile <admin>   # upload the 9 settings from .env to SSM /finance-tracker/prod
 uv run python scripts/deploy.py --build-only   # rebuild build/ + lambda.zip only, no AWS calls
 ```
 
@@ -81,7 +82,9 @@ New agents go in `agents/`, new routing logic in `routing/`, new external integr
 
 **Absolute package imports.** All code lives in the `finance_tracker` package (`src/finance_tracker/`) and imports absolutely: `from finance_tracker.storage.database import ...`. Never use a `src.` prefix, bare-name imports (`from config import ...`), or relative imports. `scripts/deploy.py` installs the package into `build/` via `uv pip install .` (hatchling, see `pyproject.toml`) and copies `lambda/handler.py` to the zip root. Keep subpackage `__init__.py` files empty — importing a subpackage must not import its modules (that would break the tracing order and config bootstrap below).
 
-**`config.py` reads `os.environ` at module scope** and will `KeyError` on import if any of the nine required vars are missing: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_NUMBER`, `ALLOWED_PHONE_NUMBERS`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DATABASE_URL`, `S3_BUCKET_NAME`, `WEBHOOK_URL`. Both test and eval entry points work around this by seeding placeholders *before* the first `src` import — `tests/conftest.py` and `evals/__init__.py`. Any new import path into `finance_tracker` needs the same bootstrap.
+**`config.py` reads `os.environ` at module scope** (after `core/ssm_config.load_ssm_parameters()`, which in the Lambda fills `os.environ` from SSM Parameter Store under `CONFIG_SSM_PATH` once per cold start, and is a no-op locally) and will `KeyError` on import if any of the nine required vars are missing: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_NUMBER`, `ALLOWED_PHONE_NUMBERS`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DATABASE_URL`, `S3_BUCKET_NAME`, `WEBHOOK_URL`. Both test and eval entry points work around this by seeding placeholders *before* the first `src` import — `tests/conftest.py` and `evals/__init__.py`. Any new import path into `finance_tracker` needs the same bootstrap.
+
+**No secrets in the Lambda configuration.** The function's environment holds only `CONFIG_SSM_PATH` (`lambda/function_config.json`, applied by `scripts/deploy.py`); secrets and settings live in SSM as SecureString parameters. A new required setting must be added to `config.py` **and** `core/ssm_config.REQUIRED_SETTINGS` (a test enforces they match), then uploaded with `scripts/sync_ssm_params.py` before deploying — `deploy.py` refuses to deploy if one is missing. Never print or log a setting's value.
 
 **Webhook signature verification is security-critical.** `webhook.verify_signature` is what proves an inbound request actually came from Twilio (HMAC over `WEBHOOK_URL` + params using `TWILIO_AUTH_TOKEN`); the handler rejects with `401` on failure. Never weaken, bypass, or disable this check — including temporarily, including to make a failing test pass. Fix the test or the call site instead.
 

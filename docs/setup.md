@@ -26,9 +26,10 @@ cp .env.example .env
 # then edit .env and fill in real values
 ```
 
-All configuration is read from environment variables at import time in
+Locally, all configuration is read from environment variables (your `.env`) at import time in
 [`config.py`](../src/finance_tracker/config.py). **All of the following are required** — the process will
-fail to start if any is missing:
+fail to start if any is missing. (In the deployed Lambda the same nine settings come from SSM
+Parameter Store instead — see [deployment.md](deployment.md#2-settings-and-secrets-ssm-parameter-store).)
 
 | Variable | Description | Example |
 |----------|-------------|---------|

@@ -7,6 +7,7 @@ control to the Phoenix process.
 Usage:
     uv run --group evals python scripts/start_phoenix.py
 """
+
 import os
 import socket
 import subprocess

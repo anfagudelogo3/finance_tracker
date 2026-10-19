@@ -146,7 +146,7 @@ In [Twilio Console](https://console.twilio.com) → Messaging → Try it out →
 
 - **Webhook signature verification** — every incoming POST is verified using Twilio's HMAC validator
 - **Phone number allowlist** — only messages from `ALLOWED_PHONE_NUMBERS` are processed
-- **No secrets in code** — all credentials loaded from environment variables (upgrade to AWS SSM Parameter Store for production)
+- **No secrets in code or in the Lambda configuration** — locally from `.env`; in production from AWS SSM Parameter Store (SecureString), loaded once per cold start
 
 ## MVP Scope
 
