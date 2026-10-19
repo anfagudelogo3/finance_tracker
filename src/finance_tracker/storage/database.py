@@ -219,6 +219,139 @@ def set_user_categories(
     return [existing.get(key, {}).get("name", name) for key, name in wanted.items()]
 
 
+def get_category_overview(user_id: int) -> list[dict]:
+    """Every category of the user (active or not) with its number of live records —
+    what the users agent shows and uses to decide whether a change needs confirmation."""
+    query = """
+        SELECT c.id, c.name, c.kind, c.active,
+               (SELECT COUNT(*) FROM expenses e
+                 WHERE e.category_id = c.id AND e.deleted_at IS NULL)
+             + (SELECT COUNT(*) FROM incomes i
+                 WHERE i.category_id = c.id AND i.deleted_at IS NULL) AS records
+        FROM categories c
+        WHERE c.user_id = %(user_id)s
+        ORDER BY c.kind, c.active DESC, c.name;
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, {"user_id": user_id})
+            return [dict(row) for row in cur.fetchall()]
+
+
+_CATEGORY_EVENT = """
+    INSERT INTO category_events
+        (user_id, category_id, kind, action, old_name, new_name, records_affected, source)
+    VALUES (%(user_id)s, %(category_id)s, %(kind)s, %(action)s,
+            %(old_name)s, %(new_name)s, %(records)s, %(source)s);
+"""
+
+
+def change_category(
+    user_id: int,
+    kind: str,
+    action: str,
+    name: str,
+    new_name: str | None = None,
+    source: str = "users_agent",
+) -> dict:
+    """Apply one category change in a transaction and log it in category_events.
+
+    action: "add" (reactivates a deactivated name), "rename" (onto an existing name it
+    becomes a merge: the records are re-pointed to the target and the source is
+    deactivated), or "deactivate" (never deleted; past records keep it). 'otro' is the
+    fallback category and can't be renamed or deactivated.
+
+    Returns {"status": ..., "name": ..., "records": n}. status is one of added,
+    reactivated, exists, renamed, merged, deactivated, already_inactive, not_found,
+    protected.
+    """
+    name = " ".join(name.lower().split())[:50]
+    new_name = " ".join((new_name or "").lower().split())[:50] or None
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, active FROM categories
+                WHERE user_id = %(user_id)s AND kind = %(kind)s
+                FOR UPDATE;
+                """,
+                {"user_id": user_id, "kind": kind},
+            )
+            rows = {row["name"].lower(): dict(row) for row in cur.fetchall()}
+            row = rows.get(name)
+
+            def log(category_id, event, old=None, new=None, records=None):
+                cur.execute(_CATEGORY_EVENT, {
+                    "user_id": user_id, "category_id": category_id, "kind": kind,
+                    "action": event, "old_name": old, "new_name": new,
+                    "records": records, "source": source,
+                })
+
+            if action == "add":
+                if row is None:
+                    cur.execute(
+                        """
+                        INSERT INTO categories (user_id, name, kind)
+                        VALUES (%(user_id)s, %(name)s, %(kind)s) RETURNING id;
+                        """,
+                        {"user_id": user_id, "name": name, "kind": kind},
+                    )
+                    log(cur.fetchone()["id"], "add", new=name)
+                    result = {"status": "added", "name": name}
+                elif not row["active"]:
+                    cur.execute("UPDATE categories SET active = TRUE WHERE id = %(id)s;", row)
+                    log(row["id"], "reactivate", new=row["name"])
+                    result = {"status": "reactivated", "name": row["name"]}
+                else:
+                    result = {"status": "exists", "name": row["name"]}
+
+            elif row is None:
+                result = {"status": "not_found", "name": name}
+            elif row["name"].lower() == "otro":
+                result = {"status": "protected", "name": row["name"]}
+
+            elif action == "rename":
+                target = rows.get(new_name or "")
+                if not new_name or target is row:
+                    result = {"status": "exists", "name": row["name"]}
+                elif target is None:
+                    cur.execute(
+                        "UPDATE categories SET name = %(new)s WHERE id = %(id)s;",
+                        {"new": new_name, "id": row["id"]},
+                    )
+                    log(row["id"], "rename", old=row["name"], new=new_name)
+                    result = {"status": "renamed", "name": new_name}
+                else:
+                    moved = 0
+                    for table in ("expenses", "incomes"):
+                        cur.execute(
+                            f"UPDATE {table} SET category_id = %(target)s "
+                            "WHERE user_id = %(user_id)s AND category_id = %(source)s;",
+                            {"target": target["id"], "source": row["id"], "user_id": user_id},
+                        )
+                        moved += cur.rowcount or 0
+                    cur.execute("UPDATE categories SET active = FALSE WHERE id = %(id)s;", row)
+                    if not target["active"]:
+                        cur.execute("UPDATE categories SET active = TRUE WHERE id = %(id)s;", target)
+                    log(row["id"], "merge", old=row["name"], new=target["name"], records=moved)
+                    result = {"status": "merged", "name": target["name"], "records": moved}
+
+            elif action == "deactivate":
+                if not row["active"]:
+                    result = {"status": "already_inactive", "name": row["name"]}
+                else:
+                    cur.execute("UPDATE categories SET active = FALSE WHERE id = %(id)s;", row)
+                    log(row["id"], "deactivate", old=row["name"])
+                    result = {"status": "deactivated", "name": row["name"]}
+            else:
+                raise ValueError(f"unknown category action {action!r}")
+            conn.commit()
+    logger.info(
+        "Category %s (%s) for user=%d → %s", action, kind, user_id, result["status"]
+    )
+    return result
+
+
 # ── Preferences (append-only history) ────────────────────────────────────────────
 #
 # user_prefs is never updated in place: every change inserts a new row holding the full

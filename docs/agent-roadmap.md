@@ -481,6 +481,7 @@ Delivered as three PRs:
   router; settings functions in `database.py` scoped by `user_id`; confirmation flow; help.
   Enables the `skip:"phase-6"` cases in `route_message.json` and adds a users-agent dataset
   (message → expected tool + arguments, including confirmation-required cases).
+  **Built** — design doc §3.3. Live evals: users agent 100% (n=18), routing 100% (n=66).
 - **Exit:** a new user can complete or skip onboarding as personal or business; categories,
   currency and business details can be changed from chat and take effect on the next message;
   renames show up in past reports, deactivated categories stay in them.

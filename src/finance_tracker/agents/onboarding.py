@@ -47,7 +47,7 @@ from finance_tracker.config import (
     TIMEZONE,
 )
 from finance_tracker.core.claude_client import client
-from finance_tracker.core.text import normalize
+from finance_tracker.core.text import normalize_answer
 from finance_tracker.storage.database import append_user_prefs, set_user_categories
 
 logger = logging.getLogger(__name__)
@@ -473,9 +473,7 @@ def _default_categories(profile: dict, kind: str) -> list[str]:
 
 
 def _norm(text: str | None) -> str:
-    """Normalized for matching: lowercase, no accents, no punctuation, single spaces."""
-    cleaned = re.sub(r"[^\w\s]", " ", normalize(text or ""))
-    return " ".join(cleaned.split())
+    return normalize_answer(text)
 
 
 def _clean(name: str) -> str:

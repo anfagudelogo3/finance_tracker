@@ -44,7 +44,7 @@ def _stub_handlers(seen):
 
         return handle
 
-    return {a: make(a) for a in ("expenses", "incomes", "reporting")}
+    return {a: make(a) for a in ("expenses", "incomes", "reporting", "users")}
 
 
 @pytest.fixture
@@ -284,3 +284,41 @@ class TestHandle:
 
         assert response.reply_text == "📊 Resumen"
         assert response.data == [{"agent": "reporting", "task": "resumen", "ok": True}]
+
+
+class TestUsersDelegation:
+    def test_settings_request_goes_to_the_users_agent(self, claude):
+        claude.messages.create.side_effect = [
+            _response(
+                "tool_use",
+                _tool_use("delegate_to_users", {"task": "agrega la categoría mascotas"}),
+            ),
+            _response("end_turn"),
+        ]
+        seen = []
+
+        result = router_agent.route(_request("agrega la categoría mascotas"), _stub_handlers(seen))
+
+        assert result.agents == ["users"]
+        assert seen[0][1].user_id == 7  # identity comes from the request, not the model
+
+    def test_category_is_created_before_recording_in_it(self, claude):
+        claude.messages.create.side_effect = [
+            _response(
+                "tool_use",
+                _tool_use("delegate_to_users", {"task": "crea la categoría mascota"}, "tu_1"),
+                _tool_use("delegate_to_expenses", {"task": "concentrado 30000 en mascota"}, "tu_2"),
+            ),
+            _response("end_turn"),
+        ]
+        seen = []
+
+        router_agent.route(
+            _request("crea la categoría mascota y registra 30k de concentrado"),
+            _stub_handlers(seen),
+        )
+
+        assert [agent for agent, _ in seen] == ["users", "expenses"]
+
+    def test_users_tool_is_offered_to_the_router(self):
+        assert "delegate_to_users" in {t["name"] for t in router_agent.TOOLS}

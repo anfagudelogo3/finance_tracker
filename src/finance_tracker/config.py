@@ -193,3 +193,39 @@ MSG_ONBOARDING_DONE = (
 MSG_ONBOARDING_HELD = "Antes de empezar me escribiste: _\"{text}\"_. ¿Lo registro?\n\n1. Sí\n2. No"
 MSG_ONBOARDING_HELD_IMAGE = "Antes de empezar me enviaste una foto: envíamela de nuevo para registrarla."
 MSG_ONBOARDING_HELD_DISCARDED = "Listo, no lo registré."
+
+# Users agent (Phase 6c) — settings, categories, help. Multi-step (tool loop), so it runs
+# on the router's model; only reached when the router delegates a settings request.
+CLAUDE_USERS_MODEL = "claude-haiku-5-5"
+USERS_EFFORT = "low"
+USERS_MAX_TOKENS = 2048
+USERS_MAX_ITERATIONS = 6          # safeguard only, like the router
+USERS_TIMEOUT_SECONDS = 8         # runs inside the router loop (12 s), which must fit Twilio's 15 s
+
+# A destructive change waits for a "sí" on the very next message (else it's cancelled)
+PENDING_ACTION_MINUTES = 30       # an older confirmation question no longer counts
+MSG_CONFIRM_RENAME = (
+    "La categoría *{name}* tiene {records} registro(s). Si la renombro a *{new_name}*, esos "
+    "registros también aparecerán como *{new_name}*. ¿Confirmas?\n\n1. Sí\n2. No"
+)
+MSG_CONFIRM_MERGE = (
+    "Ya tienes la categoría *{new_name}*. Si renombro *{name}* a *{new_name}*, sus "
+    "{records} registro(s) pasarán a *{new_name}* y *{name}* quedará desactivada. "
+    "¿Confirmas?\n\n1. Sí\n2. No"
+)
+MSG_CONFIRM_DEACTIVATE = (
+    "La categoría *{name}* tiene {records} registro(s). Si la desactivo no la usaré para "
+    "nuevos registros, pero tus reportes anteriores la seguirán mostrando. ¿Confirmas?"
+    "\n\n1. Sí\n2. No"
+)
+MSG_CONFIRM_CURRENCY = (
+    "¿Cambio tu moneda principal de {old} a {new}? Solo aplica a los registros nuevos; los "
+    "anteriores conservan su moneda.\n\n1. Sí\n2. No"
+)
+MSG_ACTION_CANCELLED = "Listo, no hice ningún cambio."
+MSG_CATEGORY_RENAMED = "✅ Renombré la categoría *{old}* a *{name}*."
+MSG_CATEGORY_MERGED = "✅ Pasé {records} registro(s) de *{old}* a *{name}* y desactivé *{old}*."
+MSG_CATEGORY_DEACTIVATED = (
+    "✅ Desactivé la categoría *{name}*. Tus reportes anteriores la siguen mostrando."
+)
+MSG_CURRENCY_CHANGED = "✅ Tu moneda principal ahora es {code}."

@@ -16,6 +16,15 @@ or with a voice note.
   whether to record it; it keeps its original date.
 - `reiniciar configuración` runs the setup again (your personal/business choice stays).
 
+## Changing your settings
+
+Just ask: *"agrega la categoría mascotas"*, *"cambia la categoría comida por alimentación"*,
+*"elimina la categoría ropa"*, *"cambia mi moneda a dólares"*, *"qué categorías tengo"*, or
+*"qué puedes hacer"*. Changes that affect existing records (renaming or removing a category
+that has records, merging two categories, changing your currency) ask for a *sí* first; any
+other reply cancels them. Removing a category never deletes it: old reports keep showing it.
+Renaming one updates past records too. The personal/business choice can't be changed.
+
 ## Logging an expense
 
 Send a short, natural message describing what you spent. The amount can be written many

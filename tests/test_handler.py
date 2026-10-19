@@ -475,3 +475,36 @@ class TestOnboardingWiring:
 
         args = pipeline["onboarding"].handle.call_args.args
         assert args[2] == "me pagaron 2 millones" and args[3] == "audio"
+
+
+class TestPendingConfirmationWiring:
+    def test_confirmation_reply_is_sent_and_nothing_is_routed(self, pipeline):
+        from finance_tracker.agents.onboarding import OnboardingOutcome
+
+        prefs = {"onboarding": {"status": "done"}, "pending_action": {"tool": "x"}}
+        pipeline["onboarding"].handle.return_value = OnboardingOutcome(
+            replies=[], prefs=prefs, handled=False
+        )
+        with patch(
+            "finance_tracker.handler.users.resolve_pending", return_value=("✅ hecho", {})
+        ) as resolve:
+            _handle_message(_make_event("sí"))
+
+        assert resolve.call_args.args[:3] == (7, prefs, "sí")
+        assert [c.args[1] for c in pipeline["send_message"].call_args_list] == ["✅ hecho"]
+        pipeline["orchestrator"].handle_message.assert_not_called()
+
+    def test_cancelled_confirmation_routes_the_message(self, pipeline):
+        from finance_tracker.agents.onboarding import OnboardingOutcome
+
+        pipeline["onboarding"].handle.return_value = OnboardingOutcome(
+            replies=[], prefs={"onboarding": {"status": "done"}}, handled=False
+        )
+        with patch(
+            "finance_tracker.handler.users.resolve_pending",
+            return_value=(None, {"default_currency": "EUR"}),
+        ):
+            _handle_message(_make_event("uber 15000"))
+
+        request = pipeline["orchestrator"].handle_message.call_args.args[0]
+        assert request.default_currency == "EUR"  # the prefs returned by resolve_pending

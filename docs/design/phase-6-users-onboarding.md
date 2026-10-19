@@ -165,6 +165,34 @@ The agent asks first, e.g. *"La categoría 'ropa' tiene 12 gastos. ¿La desactiv
 confirmation is valid **only for the very next message**: anything other than a "sí" cancels it,
 so a stale "sí" can't confirm something the user has forgotten.
 
+### 3.3 As built (6c)
+
+- `agents/users.py::handle` runs `core/agent_loop.run_tool_loop` on `claude-haiku-5-5`
+  (effort low) with six tools: `get_settings`, `add_category`, `rename_category`,
+  `deactivate_category`, `set_default_currency`, `update_business_details`. `user_id` is
+  injected by the executor; no tool schema has one. The agent writes its own reply (it never
+  handles amounts); confirmation questions are written in code.
+- **Confirmation is deterministic.** A change that needs it doesn't run: the tool stores
+  `pending_action` (with the question and `asked_at`) in `user_prefs`. On the next message
+  `handler.py` calls `users.resolve_pending` before routing: a "sí" (or "1", "dale"…) applies
+  it with no LLM call; "no" replies "Listo, no hice ningún cambio."; anything else cancels it
+  silently and the message is routed normally. A question older than
+  `PENDING_ACTION_MINUTES` (30) no longer counts. One confirmation per message.
+- Needs confirmation: currency change (always), merge (always), rename or deactivate of a
+  category with records. Without records they apply at once. `otro` is protected.
+- Category changes go through `database.change_category` (one transaction + a
+  `category_events` row); record counts come from `database.get_category_overview`.
+- **Router:** new `delegate_to_users` tool. Help questions ("qué puedes hacer") now go to
+  the users agent instead of the router's own small-talk reply; greetings and thanks stay with
+  the router. "Create a category and record in it" delegates to users first, then expenses.
+  Deleting records or the account is still declined by the router.
+- **Latency:** the users agent has its own 8 s budget (`USERS_TIMEOUT_SECONDS`) because it
+  runs inside the router's 12 s loop. Measured alone: p50 3.5 s, max 5.7 s. A settings message
+  is therefore the slowest path (router + users agent + router's closing call); watch it in
+  Phoenix.
+- **Evals:** `evals/datasets/users_agent.json` (18 cases, 100%) and the routing dataset's
+  users cases enabled (66 scored, 100% router and hybrid).
+
 ## 4. Data model
 
 ### 4.1 Category ids instead of text (6a)

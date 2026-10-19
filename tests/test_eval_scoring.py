@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from evals.scoring import score_expense, score_date_range, score_routing
+from evals.scoring import score_expense, score_date_range, score_routing, score_users
 
 
 # ── score_expense ──────────────────────────────────────────────────────────────
@@ -280,8 +280,10 @@ class TestRouteMessageDataset:
             assert profile["type"] in {"personal", "business"}, case["id"]
             if profile["type"] == "business":
                 # Classification needs to know what the business sells and pays for
-                assert profile["business"]["industry"], case["id"]
-                assert profile["business"]["description"], case["id"]
+                business = profile["business"]
+                assert business["industry"], case["id"]
+                # Onboarding stores sells/main_costs; older cases use description
+                assert business.get("sells") or business.get("description"), case["id"]
             else:
                 assert "business" not in profile, case["id"]
 
@@ -290,3 +292,52 @@ class TestRouteMessageDataset:
             for turn in case.get("conversation", []):
                 assert turn["role"] in {"user", "assistant"}, case["id"]
                 assert turn["content"], case["id"]
+
+
+class TestScoreUsers:
+    def test_exact_match(self):
+        actual = {"action": "rename_category", "confirmation": True,
+                  "args": {"kind": "expense", "name": "comida", "new_name": "alimentación"}}
+        expected = {"action": "rename_category", "confirmation": True,
+                    "args": {"name": "comida", "new_name": "alimentacion"}}
+        assert score_users(actual, expected)["all_correct"]
+
+    def test_wrong_action(self):
+        result = score_users({"action": "none"}, {"action": "add_category", "args": {"name": "x"}})
+        assert not result["all_correct"]
+        assert not result["action"]["correct"] and not result["args"]["correct"]
+
+    def test_string_args_match_by_containment(self):
+        actual = {"action": "update_business_details", "args": {"sells": "Almuerzos y domicilios"}}
+        assert score_users(actual, {"action": "update_business_details",
+                                    "args": {"sells": "domicilios"}})["all_correct"]
+
+    def test_missing_arg_is_wrong(self):
+        result = score_users({"action": "add_category", "args": {}},
+                             {"action": "add_category", "args": {"name": "mascotas"}})
+        assert not result["args"]["correct"]
+
+    def test_confirmation_checked_only_when_expected(self):
+        actual = {"action": "deactivate_category", "args": {"name": "ropa"}, "confirmation": True}
+        assert score_users(actual, {"action": "deactivate_category"})["all_correct"]
+        assert not score_users(actual, {"action": "deactivate_category",
+                                        "confirmation": False})["all_correct"]
+
+    def test_none_with_no_args(self):
+        assert score_users({"action": "none", "args": {}}, {"action": "none"})["all_correct"]
+
+
+class TestUsersAgentDataset:
+    @pytest.fixture(scope="class")
+    def cases(self):
+        path = Path(__file__).parents[1] / "evals" / "datasets" / "users_agent.json"
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def test_ids_unique_and_actions_known(self, cases):
+        from finance_tracker.agents.users import TOOLS
+
+        tools = {t["name"] for t in TOOLS} - {"get_settings"}
+        assert len({c["id"] for c in cases}) == len(cases)
+        for case in cases:
+            assert case["expected"]["action"] in tools | {"none"}, case["id"]
+            assert case["profile"]["type"] in {"personal", "business"}, case["id"]
