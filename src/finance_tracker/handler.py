@@ -223,7 +223,8 @@ def _route(
 def _handle_message(event):
     """Process an incoming WhatsApp message from Twilio."""
     params = _parse_form_body(event)
-    logger.info(params)
+    # Field names only: the values include the sender's phone, name and message text
+    logger.info("Webhook fields: %s", sorted(params))
 
     # Verify webhook signature
     url = _build_url(event)

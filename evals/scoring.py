@@ -115,10 +115,11 @@ def score_routing(actual: dict, expected: dict) -> dict:
 
     Args:
         actual:   {"route": "agents" | "clarify" | "decline" | "none",
-                   "agents": [...]}  — agents is order-insensitive.
+                   "agents": [...]}  — agents in the order first delegated.
         expected: Same shape from the dataset. For non-"agents" routes the expected
                   agents list is empty, so any delegation alongside a clarify/decline
-                  counts as wrong.
+                  counts as wrong. agents is order-insensitive unless "ordered": true
+                  (a move between kinds: the record's own agent goes first).
 
     Returns:
         {
@@ -131,8 +132,12 @@ def score_routing(actual: dict, expected: dict) -> dict:
     act_route = actual.get("route")
     route_correct = act_route == exp_route
 
-    exp_agents = sorted(set(expected.get("agents") or []))
-    act_agents = sorted(set(actual.get("agents") or []))
+    if expected.get("ordered"):
+        exp_agents = list(expected.get("agents") or [])
+        act_agents = list(dict.fromkeys(actual.get("agents") or []))
+    else:
+        exp_agents = sorted(set(expected.get("agents") or []))
+        act_agents = sorted(set(actual.get("agents") or []))
     agents_correct = act_agents == exp_agents
 
     return {

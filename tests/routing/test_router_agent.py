@@ -208,6 +208,53 @@ class TestOtherRoutes:
         assert (result.route, result.reply_text) == ("decline", MSG_OUT_OF_SCOPE)
 
 
+class TestMoveBetweenKinds:
+    def test_results_carry_notes_and_errors_and_an_empty_step_adds_no_text(self, claude):
+        claude.messages.create.side_effect = [
+            _response(
+                "tool_use",
+                _tool_use("delegate_to_expenses", {"task": "bórralo: gasto #5"}, "tu_1"),
+            ),
+            _response(
+                "tool_use",
+                _tool_use("delegate_to_incomes", {"task": "reemplaza gasto #5"}, "tu_2"),
+            ),
+            _response("end_turn"),
+        ]
+        handlers = _stub_handlers([])
+        handlers["expenses"] = lambda r: AgentResponse(
+            ok=True, reply_text="", notes=["expense #5 removed: record it with replaces=5"]
+        )
+        handlers["incomes"] = lambda r: AgentResponse(
+            ok=True, reply_text="🔄 Pasado a ingresos: …"
+        )
+
+        result = router_agent.route(_request(), handlers)
+
+        # messages: user, assistant (expenses), tool results (expenses), …
+        first = claude.messages.create.call_args_list[1].kwargs["messages"][2]
+        assert '"notes": ["expense #5 removed' in first["content"][0]["content"]
+        assert result.reply_text == "🔄 Pasado a ingresos: …"
+
+    def test_a_failed_step_tells_the_router_why(self, claude):
+        claude.messages.create.side_effect = [
+            _response(
+                "tool_use", _tool_use("delegate_to_incomes", {"task": "reemplaza #5"})
+            ),
+            _response("end_turn"),
+        ]
+        handlers = _stub_handlers([])
+        handlers["incomes"] = lambda r: AgentResponse(
+            ok=False, reply_text="No entendí", error="delete it first"
+        )
+
+        result = router_agent.route(_request(), handlers)
+
+        sent = claude.messages.create.call_args_list[1].kwargs["messages"][-1]
+        assert '"error": "delete it first"' in sent["content"][0]["content"]
+        assert "No pude procesar: reemplaza #5" in result.reply_text
+
+
 class TestSafeguardReplies:
     def test_safeguard_after_work_reports_what_was_done(self, claude):
         claude.messages.create.return_value = _response(

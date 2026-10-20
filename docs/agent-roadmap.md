@@ -541,7 +541,8 @@ Scope and decisions: [design/phase-8-corrections.md](design/phase-8-corrections.
 - The agents' loop ends only when Claude ends its turn: a plain new record costs one
   extra (short) closing call.
 - **Delivery:** 8a edit log + reports with incomes (**built**); 8b edit and delete
-  (**built**); 8c undo and kind changes.
+  (**built**); 8c kind changes (**built**: two agent steps the router combines, with order,
+  copied fields and never-half-done held by code); 8d undo.
 - **Evals:** `corrections.json` (action, target record, final values, confirmation asked);
   the skipped correction routing cases enabled.
 

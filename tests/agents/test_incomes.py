@@ -159,7 +159,8 @@ class TestHandle:
 
         response = handle(_request("gracias"))
 
-        assert response.ok
+        # Nothing done is not ok: the router mustn't take it for a finished step
+        assert not response.ok
         assert response.data is None
         assert response.reply_text == MSG_EMPTY_INCOME
         mock_save_income.assert_not_called()

@@ -560,6 +560,25 @@ def _correction_decide(case: dict) -> dict:
         events.append({"action": "record", "args": {}, "confirmation": False})
         return 999
 
+    # Moves (Phase 8c): the first half on this side, or a record moving in from the other
+    other = "income" if kind == "expense" else "expense"
+    other_rows = {r["id"]: r for r in _correction_rows(other)}
+
+    def move_out_record(user_id, k, record_id, message_id, source):
+        events.append({"action": "move", "args": {"record_id": record_id}, "confirmation": False})
+        return {"before": {}, "event_id": 1}
+
+    def save_record(k, message_id, record, user_id, source, related_event=None):
+        events.append({"action": "record", "args": {"replaces": case["incoming"]},
+                       "confirmation": False})
+        return 999
+
+    incoming = []
+    if case.get("incoming"):
+        source = other_rows[case["incoming"]]
+        incoming = [{"event_id": 1, "kind": other, "record_id": case["incoming"],
+                     "before": {**source, "date": str(source["date"])}}]
+
     replied = None
     if case.get("replied"):
         replied = {"role": "assistant", "text": "💸 / 💰 confirmación", "date": None,
@@ -576,11 +595,18 @@ def _correction_decide(case: dict) -> dict:
         message_type="text", now=_CORRECTIONS_NOW, conversation=[], replied_to=replied,
     )
     db = records_module.database
+    records_module.start_message()
+    if incoming:
+        records_module._move_started.set(True)  # the other agent moved it out just before
     try:
         with patch.object(db, "get_recent_records", return_value=rows), \
                 patch.object(db, "get_record", side_effect=lambda u, k, i: by_id.get(i)), \
                 patch.object(db, "update_record", side_effect=update_record), \
                 patch.object(db, "delete_record", side_effect=delete_record), \
+                patch.object(db, "move_out_record", side_effect=move_out_record), \
+                patch.object(db, "save_record", side_effect=save_record), \
+                patch.object(db, "get_unreplaced_moves", return_value=incoming), \
+                patch.object(db, "get_user_prefs", return_value={}), \
                 patch.object(db, "get_user_categories", return_value=categories), \
                 patch.object(pending_actions, "append_user_prefs", side_effect=append_user_prefs), \
                 patch.object(agent, "get_user_categories", return_value=categories), \
@@ -588,6 +614,8 @@ def _correction_decide(case: dict) -> dict:
             response = agent.handle(request)
     except Exception as exc:  # an API error is a failed case, not a crashed run
         return {"action": f"error:{type(exc).__name__}", "args": {}, "confirmation": False}
+    finally:
+        records_module.start_message()
     if events:
         return events[0]
     if response.ok and response.reply_text:

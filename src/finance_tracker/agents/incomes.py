@@ -11,7 +11,6 @@ from finance_tracker.core import agent_loop
 from finance_tracker.core.claude_client import client
 from finance_tracker.config import (
     CLAUDE_EXTRACTION_MODEL,
-    MSG_ERROR,
     RECORD_AGENT_MAX_ITERATIONS,
     DEFAULT_CURRENCY,
     DEFAULT_INCOME_CATEGORIES,
@@ -104,8 +103,9 @@ def _build_income_tool(categories: list[str]) -> dict:
                                 "type": "string",
                                 "description": "Short summary of the income.",
                             },
+                            "replaces": records.replaces_property("income"),
                         },
-                        "required": ["amount", "currency", "category", "date_text", "date", "description"],
+                        "required": ["amount", "currency", "category", "date_text", "date", "description", "replaces"],
                     },
                 },
             },
@@ -121,14 +121,15 @@ def _run(
     today: date | None,
     execute_tool,
     replied_to: dict | None = None,
+    moving_in: str = "",
 ):
     """One agent turn on the tool loop; it ends when Claude ends its turn. A new record
     is record_incomes plus a closing call; corrections (find → update/delete) take one
     more. Replies are written in code from what the tools did."""
     cats = categories or DEFAULT_INCOME_CATEGORIES
-    content = text
-    if replied_to:
-        content = f"{as_prompt_block(replied_to)}\n<message>{text}</message>"
+    # The quoted message (swipe-reply) and expenses moving here (records.py)
+    blocks = [b for b in (as_prompt_block(replied_to) if replied_to else "", moving_in) if b]
+    content = "\n".join([*blocks, f"<message>{text}</message>"]) if blocks else text
     logger.info("Calling Claude (income agent): %s", text)
     return agent_loop.run_tool_loop(
         client=client,
@@ -179,27 +180,29 @@ def handle(request: AgentRequest) -> AgentResponse:
 
     def execute(name: str, tool_input: dict) -> str:
         if name == "record_incomes":
-            corrections.check_new_record()
+            items = tool_input.get("incomes") or []
+            corrections.check_new_record(items)
+            # An expense moved here (registered as the wrong kind): records.py
+            moves = [corrections.replace(i) for i in items if i.get("replaces")]
             new_saved, new_future = _save(
-                tool_input.get("incomes") or [], request, message_date
+                [i for i in items if not i.get("replaces")], request, message_date
             )
             saved.extend(new_saved)
             future.extend(new_future)
-            return json.dumps({"recorded": len(new_saved), "future_not_recorded": len(new_future)})
+            return json.dumps(
+                {"recorded": len(new_saved), "future_not_recorded": len(new_future),
+                 **({"moves": moves} if moves else {})}
+            )
         return corrections.execute(name, tool_input)
 
     outcome = _run(
         request.text, categories, request.default_currency, message_date, execute,
-        request.replied_to,
+        request.replied_to, corrections.moving_in_block(),
     )
-    parts = [_reply(saved, future)] if saved or future else []
-    parts += corrections.replies
-    if parts:
-        return AgentResponse(ok=True, reply_text="\n\n".join(parts), data=saved or None)
-    if outcome.status == agent_loop.END_TURN:
-        logger.info("Nothing to record or correct in message id=%d", request.message_id)
-        return AgentResponse(ok=True, reply_text=MSG_EMPTY_INCOME, data=None)
-    return AgentResponse(ok=False, reply_text=MSG_ERROR, error=outcome.status)
+    return records.agent_response(
+        "income", request, outcome, corrections, [_reply(saved, future)] if saved or future else [],
+        saved, MSG_EMPTY_INCOME,
+    )
 
 
 def _save(items: list[dict], request: AgentRequest, message_date: date):

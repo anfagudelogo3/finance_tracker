@@ -11,6 +11,9 @@ from finance_tracker.storage.database import (
     get_recent_records,
     update_record,
     delete_record,
+    move_record,
+    get_unreplaced_moves,
+    restore_record,
     get_or_create_user,
     get_user_categories,
     change_category,
@@ -564,3 +567,46 @@ class TestRecordCorrections:
         get_message_records(7, 41)
         sql = cur.execute.call_args.args[0]
         assert "FROM record_events" in sql
+
+
+class TestRecordMoves:
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_move_is_one_transaction_linking_the_new_record(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        # source row, its 'move' event, the category, the new row, its 'create' event
+        cur.fetchone.side_effect = [
+            _live_row(), {"id": 901}, {"id": 4, "name": "otro"}, {"id": 30}, {"id": 902},
+        ]
+        record = {"amount": 25000.0, "currency": "COP", "date": "2026-10-20",
+                  "description": "almuerzo", "category": "otro"}
+
+        result = move_record(7, "expense", 12, "income", record, 89, "income_agent")
+
+        assert result["record"]["id"] == 30
+        assert mock_get_conn.call_count == 1
+        mock_get_conn.return_value.commit.assert_called_once()
+        events = [c.args[1] for c in cur.execute.call_args_list
+                  if "INSERT INTO record_events" in c.args[0]]
+        assert events[0]["action"] == "move" and events[0]["record_id"] == 12
+        assert events[1]["action"] == "create" and events[1]["related_event"] == 901
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_unreplaced_moves_are_moves_nothing_points_back_to(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        cur.fetchall.return_value = []
+        get_unreplaced_moves(7, 22)
+        sql, params = cur.execute.call_args.args
+        assert "action = 'move'" in sql and "NOT EXISTS" in sql and "related_event" in sql
+        assert params == {"user_id": 7, "message_id": 22}
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_restore_clears_deleted_at_and_logs_an_undo(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        cur.rowcount = 1
+        cur.fetchone.side_effect = [_live_row(), {"id": 903}]
+
+        restore_record(7, "expense", 12, 22, "expense_agent", related_event=901)
+
+        assert "SET deleted_at = NULL" in cur.execute.call_args_list[0].args[0]
+        event = cur.execute.call_args_list[-1].args[1]
+        assert event["action"] == "undo" and event["related_event"] == 901

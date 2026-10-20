@@ -93,6 +93,11 @@ Made a mistake? Tell the bot:
 - **Deleting** always asks first: *"borra el último gasto"* → *"¿Borro este gasto? …"* →
   *sí*. Records are never really erased (they're marked as deleted and kept in the
   history), and deleting everything at once isn't allowed.
+- **Expense ↔ income:** swipe-reply *"este no es un gasto, es un ingreso"* (or the reverse)
+  and the record moves, keeping its amount, date and description:
+  `🔄 Pasado a ingresos: 💰 COP 99.800 de otro (…)`. Described instead (*"el almuerzo de
+  ayer era un ingreso"*), the bot asks *"¿Es este? … → Lo paso a ingresos (…)"* first. If
+  the move can't finish, the record is left as it was and the bot says so.
 
 Any field can change: amount, currency, category, date, description, payment method and
 merchant. The moment a record was first registered never changes.

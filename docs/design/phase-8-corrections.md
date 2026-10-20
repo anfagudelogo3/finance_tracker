@@ -1,7 +1,7 @@
 # Phase 8 — Conversational corrections: scope and decisions
 
-Status: **8a and 8b built** (edit log + reports with incomes; edit and delete); 8c not
-started. Every
+Status: **8a and 8b built** (edit log + reports with incomes; edit and delete); **8c: moves
+between expense and income built** (§4d), undo not started. Every
 scoping question is decided (§2, §4). This document records the decisions taken while scoping
 Phase 8 and the design that follows from them. The roadmap ([agent-roadmap.md](../agent-roadmap.md)
 §7) summarizes it and links here.
@@ -47,8 +47,8 @@ reverse). The two events are linked in the log so the move can be traced and und
 |---|---|---|
 | Edit of an **exact** reference (swipe-reply) | **No**: applied directly | Shows what changed: "✏️ Gasto actualizado: COP 25.000 → COP 15.000 (comida, 2026-10-20)" |
 | Edit of a **non-exact** reference ("el último", "el Uber de ayer") | **Yes, the target first**: "¿Es este? 💸 COP 14.000 en transporte (2026-10-21) → lo cambio a COP 12.000" | Same as above, after "sí" |
-| Kind change ("eso era un ingreso") | **No** when the record is exact; target confirmed first otherwise | Shows both halves: removed as expense, recorded as income |
-| Delete | **Yes**: "¿Borro el gasto COP 25.000 en comida del 2026-10-20?" | "🗑️ Gasto borrado: …" |
+| Kind change ("eso era un ingreso") | **No** when the record is exact; target confirmed first otherwise ("¿Es este? … → Lo paso a ingresos (otro)") | One line: "🔄 Pasado a ingresos: 💰 COP 99.800 de otro (…)" |
+| Delete the user asked for | **Yes**: "¿Borro el gasto COP 25.000 en comida del 2026-10-20?" | "🗑️ Gasto borrado: …" |
 | Undo | **Always clarifies first**, naming exactly what it would undo: "¿Deshago la creación del gasto COP 20.000 en comida de hoy?" | What was undone |
 | Bulk delete ("borra todos mis gastos") | **Declined**: the router refuses it | — |
 
@@ -159,8 +159,9 @@ tests for the expenses / incomes / net layout.
 2. **An undo can't be undone.** Undo writes an `undo` event; "deshaz eso" never targets an
    `undo` event (it clarifies which earlier action is meant, if any).
 3. **A kind change needs no confirmation** when the record is exact: nothing is lost, and the
-   reply shows both halves. With a non-exact reference the target is confirmed first, like
-   any edit.
+   reply is one line. With a non-exact reference the target is confirmed first, like any
+   edit. Its delete is internal to the move: only a delete the user explicitly asks for gets
+   "¿Lo borro?".
 4. **Description search window: the last 60 days.** Older records need a date in the message
    ("el Uber del 3 de agosto").
 5. **Excel:** a second sheet "Ingresos" and a summary sheet with totals and the net, per
@@ -216,13 +217,58 @@ tests for the expenses / incomes / net layout.
 - **Evals:** `corrections.json` (17 cases) and 3 more routing cases; the two skipped
   correction routing cases are enabled.
 
+## 4d. As built — 8c moves (expense ↔ income)
+
+Found in production (2026-10-20): "este no es un gasto, es un ingreso" left the record in
+**both** tables. The router sent both halves in one round, the expense agent refused (8b's
+"not possible yet" rule) but reported `ok`, and the income agent created the income anyway.
+
+**Design: modular agents, order and atomicity held by code.** No "move" tool: the router
+combines the agents' generic steps, and code makes the pair behave as one operation.
+
+- **Two generic steps.** `delete_record` gets a `reason`: `user_asked` (asks "¿Lo borro?") or
+  `moved`. Each new record in `record_expenses` / `record_incomes` gets `replaces` (the other
+  kind's id). The router rule: the record's own agent removes it first, then — using the id
+  from that result's `notes` — the other agent records it with `replaces`.
+- **Order, enforced** (`Corrections.replace`): a record with `replaces` is refused unless that
+  record was moved out (a `move` event) or is waiting for confirmation in this same message.
+  The error tells the model what must happen first; the router reads it and retries.
+- **Fields copied in code** (`_moved_record`): amount, currency, date and description come from
+  the original (payment method and merchant too, into an expense); the receiving agent only
+  chooses the category from its own list. The original date can't become today.
+- **Confirmation.** A swipe-replied record is moved out at once. A record found by search
+  stores a pending `move_record` with no question; when the other agent records it, its
+  category is added and "¿Es este? … → Lo paso a ingresos (regalo)" is asked. On "sí",
+  `database.move_record` soft-deletes and inserts **in one transaction**.
+- **Linked in the log.** The removal is a `move` event; the new record's `create` event has
+  `related_event` = that move, so a move with nothing pointing back to it is unfinished.
+- **Never half done** (`records.settle_moves`, called by the orchestrator after the agents):
+  a record moved out that nothing replaced is **restored** (an `undo` event) and a move still
+  missing its category is cancelled, each with "⚠️ No pude pasar … así que lo dejé como
+  estaba". It reads the database only when the message started a move.
+- **The receiving agent is told.** Once a move started, `<moving_in>` lists the record and the
+  id to use, and its first plain `record_*` without `replaces` is refused once, so it can't
+  record a duplicate instead. A plain new record costs no extra database read.
+- **Honest results for the router.** An agent that did nothing returns `ok=false` with the
+  last tool error, which the router sees in its tool result (`error`, plus `notes` for what's
+  left to another agent). An agent that ended with text instead of `ask_user` has that text
+  sent as its question, with a note that nothing changed; the text is also logged. A step with
+  nothing to say (the first half of a move) adds no line to the reply.
+- **Evals:** `corrections.json` 23 cases (moves out by swipe-reply, by search and as the router
+  phrases it; moves in, with and without the id in the task); `route_message.json` 79 cases,
+  with `"ordered": true` move cases scoring that the record's own agent goes first. The
+  corrections eval had been counting an agent's ignored text as "asked"; it now needs a real
+  question.
+- **Also:** the handler logs the webhook's field names, not its values (phone, name, text).
+
 ## 5. Delivery
 
 | PR | Content |
 |---|---|
 | **8a — Edit log + reports** | `record_events` (create events from day one), reports and Excel with incomes and net. No new chat capability yet. |
 | **8b — Edit and delete** | Agents on `run_tool_loop` (ends on `end_turn`); `find_records`, `update_record`, `delete_record` (with confirmation); reply-context link for correction confirmations; `corrections.json`. |
-| **8c — Undo and kind changes** | `undo` with clarification; `move` between expense and income; routing cases enabled. |
+| **8c — Kind changes** (built) | Moves between expense and income: `delete_record` reason, `replaces`, order and settling in code (§4d). |
+| **8d — Undo** | `undo` with clarification. |
 
 Each PR: tests and the matching evals green, docs updated, and the live routing eval rerun
 whenever a prompt changes.

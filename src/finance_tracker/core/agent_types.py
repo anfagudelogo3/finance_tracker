@@ -43,3 +43,6 @@ class AgentResponse:
     reply_attachment: dict | None = None  # {"url": str, "filename": str}
     data: list[dict] | None = None
     error: str | None = None
+    # For the router, not the user: what a step left for another agent to do (e.g.
+    # "expense #5 was removed to be moved: record it as an income with replaces=5")
+    notes: list[str] | None = None

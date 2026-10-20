@@ -737,5 +737,47 @@
       "correction",
       "single"
     ]
+  },
+  {
+    "id": "move-reply-expense-to-income",
+    "input": "este no es un gasto, es un ingreso",
+    "profile": {"type": "personal"},
+    "replied_to": {
+      "role": "assistant",
+      "text": "💸 Gasto registrado: COP 99.800 en otro (2026-10-18)",
+      "date": "2026-10-18T19:30:00-05:00",
+      "records": [
+        {"kind": "expense", "id": 5, "amount": 99800.0, "currency": "COP", "category": "otro",
+         "date": "2026-10-18", "description": "transferencia de dinero"}
+      ],
+      "source": "database"
+    },
+    "expected": {"route": "agents", "agents": ["expenses", "incomes"], "ordered": true},
+    "tags": ["reply", "correction", "move"],
+    "notes": "Phase 8c: the expense agent removes it first, then the income agent records it with replaces"
+  },
+  {
+    "id": "move-by-description",
+    "input": "el almuerzo de ayer era un ingreso, no un gasto",
+    "profile": {"type": "personal"},
+    "expected": {"route": "agents", "agents": ["expenses", "incomes"], "ordered": true},
+    "tags": ["correction", "move"]
+  },
+  {
+    "id": "move-reply-income-to-expense",
+    "input": "eso no fue un ingreso, fue un gasto",
+    "profile": {"type": "personal"},
+    "replied_to": {
+      "role": "assistant",
+      "text": "💰 Ingreso registrado: COP 500.000 de freelance (2026-10-18)",
+      "date": "2026-10-18T19:30:00-05:00",
+      "records": [
+        {"kind": "income", "id": 31, "amount": 500000.0, "currency": "COP", "category": "freelance",
+         "date": "2026-10-18", "description": "pago de cliente"}
+      ],
+      "source": "database"
+    },
+    "expected": {"route": "agents", "agents": ["incomes", "expenses"], "ordered": true},
+    "tags": ["reply", "correction", "move"]
   }
 ]

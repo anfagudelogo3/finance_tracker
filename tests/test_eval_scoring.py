@@ -204,6 +204,15 @@ class TestScoreRouting:
         )
         assert result["all_correct"] is True
 
+    def test_ordered_agents_must_come_in_order(self):
+        expected = {"route": "agents", "agents": ["expenses", "incomes"], "ordered": True}
+        assert score_routing(
+            {"route": "agents", "agents": ["expenses", "incomes"]}, expected
+        )["all_correct"] is True
+        assert score_routing(
+            {"route": "agents", "agents": ["incomes", "expenses"]}, expected
+        )["all_correct"] is False
+
     def test_missing_agent(self):
         result = score_routing(
             {"route": "agents", "agents": ["expenses"]},
@@ -357,6 +366,9 @@ class TestCorrectionsDataset:
         assert len({c["id"] for c in cases}) == len(cases)
         for case in cases:
             assert case["kind"] in {"expense", "income"}, case["id"]
-            assert case["expected"]["action"] in {"record", "update", "delete", "ask"}, case["id"]
-            if case["expected"]["action"] in {"update", "delete"}:
+            action = case["expected"]["action"]
+            assert action in {"record", "update", "delete", "move", "ask"}, case["id"]
+            if action in {"update", "delete", "move"}:
                 assert "record_id" in case["expected"]["args"], case["id"]
+            if "incoming" in case:  # a record moving in: it's recorded with replaces
+                assert case["expected"]["args"] == {"replaces": case["incoming"]}, case["id"]
