@@ -641,16 +641,8 @@ def _log_record_event(
     return cur.fetchone()["id"]
 
 
-def save_expense(
-    message_id: int, expense: dict, user_id: int, event_source: str = "expense_agent"
-) -> int:
-    """Insert a parsed expense linked to a message and user. Returns the new row ID.
-
-    The category name is resolved to the user's category_id (unknown → 'otro'), and
-    expense["category"] is set to the stored name so the confirmation matches. A
-    'create' row is written to record_events in the same transaction.
-    """
-    query = """
+_INSERT_SQL = {
+    "expense": """
         INSERT INTO expenses (
             user_id, message_id, amount, currency, category_id, expense_date,
             payment_method, merchant, description, confidence, source
@@ -659,39 +651,8 @@ def save_expense(
             %(payment_method)s, %(merchant)s, %(description)s, %(confidence)s, %(source)s
         )
         RETURNING id;
-    """
-    expense["user_id"] = user_id
-    expense["message_id"] = message_id
-    expense.setdefault("currency", "COP")
-    expense.setdefault("source", "text")
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            category = _resolve_category(cur, user_id, "expense", expense.get("category"))
-            expense["category_id"] = category["id"]
-            expense["category"] = category["name"]
-            cur.execute(query, expense)
-            row_id = cur.fetchone()["id"]
-            _log_record_event(
-                cur, user_id, "expense", row_id, "create",
-                after=_snapshot("expense", expense), message_id=message_id,
-                source=event_source,
-            )
-            conn.commit()
-            logger.debug("Inserted expense id=%d message_id=%d", row_id, message_id)
-            return row_id
-
-
-def save_income(
-    message_id: int, income: dict, user_id: int, event_source: str = "income_agent"
-) -> int:
-    """Insert a parsed income record linked to a message and user. Returns the new row ID.
-
-    Mirrors save_expense's pattern exactly, but `source` here means the money's origin
-    ('manual' | 'gmail' | 'bank'), not the WhatsApp message channel — callers must not
-    pass a message_type value into it. The category is resolved to an id and a
-    'create' event logged, like there.
-    """
-    query = """
+    """,
+    "income": """
         INSERT INTO incomes (
             user_id, message_id, amount, currency, category_id, income_date,
             description, confidence, source
@@ -700,26 +661,79 @@ def save_income(
             %(description)s, %(confidence)s, %(source)s
         )
         RETURNING id;
-    """
-    income["user_id"] = user_id
-    income["message_id"] = message_id
-    income.setdefault("currency", "COP")
-    income.setdefault("source", "manual")
+    """,
+}
+# expenses.source is the message channel (text/audio/image); incomes.source is the
+# money's origin ('manual' | 'gmail' | 'bank')
+_DEFAULT_SOURCE = {"expense": "text", "income": "manual"}
+
+
+def _insert_record(
+    cur,
+    kind: str,
+    record: dict,
+    user_id: int,
+    message_id: int | None,
+    event_source: str,
+    related_event: int | None = None,
+) -> int:
+    """Insert one expense/income and log its 'create' event, inside the caller's
+    transaction. The category name is resolved to the user's category_id (unknown →
+    'otro') and record["category"] set to the stored name, so confirmations match."""
+    record["user_id"] = user_id
+    record["message_id"] = message_id
+    record.setdefault("currency", "COP")
+    record.setdefault("source", _DEFAULT_SOURCE[kind])
+    for optional in ("description", "confidence", "payment_method", "merchant"):
+        record.setdefault(optional, None)
+    category = _resolve_category(cur, user_id, kind, record.get("category"))
+    record["category_id"] = category["id"]
+    record["category"] = category["name"]
+    cur.execute(_INSERT_SQL[kind], record)
+    row_id = cur.fetchone()["id"]
+    _log_record_event(
+        cur, user_id, kind, row_id, "create",
+        after=_snapshot(kind, record), message_id=message_id,
+        source=event_source, related_event=related_event,
+    )
+    return row_id
+
+
+def save_record(
+    kind: str,
+    message_id: int,
+    record: dict,
+    user_id: int,
+    event_source: str,
+    related_event: int | None = None,
+) -> int:
+    """Insert a parsed expense or income linked to a message and user, with its
+    'create' event in the same transaction. `related_event` is the 'move' event of the
+    record it replaces (moved between expenses and incomes). Returns the new row ID."""
     with get_connection() as conn:
         with conn.cursor() as cur:
-            category = _resolve_category(cur, user_id, "income", income.get("category"))
-            income["category_id"] = category["id"]
-            income["category"] = category["name"]
-            cur.execute(query, income)
-            row_id = cur.fetchone()["id"]
-            _log_record_event(
-                cur, user_id, "income", row_id, "create",
-                after=_snapshot("income", income), message_id=message_id,
-                source=event_source,
+            row_id = _insert_record(
+                cur, kind, record, user_id, message_id, event_source, related_event
             )
             conn.commit()
-            logger.debug("Inserted income id=%d message_id=%d", row_id, message_id)
-            return row_id
+    logger.debug("Inserted %s id=%d message_id=%d", kind, row_id, message_id)
+    return row_id
+
+
+def save_expense(
+    message_id: int, expense: dict, user_id: int, event_source: str = "expense_agent"
+) -> int:
+    """Insert a parsed expense linked to a message and user. Returns the new row ID."""
+    return save_record("expense", message_id, expense, user_id, event_source)
+
+
+def save_income(
+    message_id: int, income: dict, user_id: int, event_source: str = "income_agent"
+) -> int:
+    """Insert a parsed income linked to a message and user. Returns the new row ID.
+    `source` here means the money's origin ('manual' | 'gmail' | 'bank'), not the
+    WhatsApp message channel — callers must not pass a message_type value into it."""
+    return save_record("income", message_id, income, user_id, event_source)
 
 
 def get_expenses(user_id: int, min_date: str, max_date: str) -> list[dict]:
@@ -883,32 +897,143 @@ def update_record(
     return {"before": before, "after": after}
 
 
+def _soft_delete(
+    cur, user_id: int, kind: str, record_id: int, message_id: int | None, source: str,
+    action: str,
+) -> tuple[dict, int]:
+    """Soft-delete one live record and log `action` ('delete' or 'move'), inside the
+    caller's transaction. Returns (snapshot, event id). Raises LookupError when it isn't
+    the user's or is already gone."""
+    sql = _RECORD_SQL[kind]
+    cur.execute(_select_records(kind) + " AND r.id = %(record_id)s FOR UPDATE OF r;",
+                {"user_id": user_id, "record_id": record_id})
+    row = cur.fetchone()
+    if row is None:
+        raise LookupError(f"{kind} #{record_id} not found")
+    before = _snapshot(kind, dict(row))
+    cur.execute(
+        f"UPDATE {sql['table']} SET deleted_at = NOW() "
+        "WHERE id = %(record_id)s AND user_id = %(user_id)s;",
+        {"record_id": record_id, "user_id": user_id},
+    )
+    event_id = _log_record_event(
+        cur, user_id, kind, record_id, action, before=before,
+        message_id=message_id, source=source,
+    )
+    return before, event_id
+
+
 def delete_record(
     user_id: int, kind: str, record_id: int, message_id: int | None, source: str
 ) -> dict:
     """Soft-delete one live record (deleted_at) and log a 'delete' event. Returns the
     record's snapshot. Raises LookupError when it isn't the user's or is already gone."""
-    sql = _RECORD_SQL[kind]
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(_select_records(kind) + " AND r.id = %(record_id)s FOR UPDATE OF r;",
-                        {"user_id": user_id, "record_id": record_id})
-            row = cur.fetchone()
-            if row is None:
-                raise LookupError(f"{kind} #{record_id} not found")
-            before = _snapshot(kind, dict(row))
-            cur.execute(
-                f"UPDATE {sql['table']} SET deleted_at = NOW() "
-                "WHERE id = %(record_id)s AND user_id = %(user_id)s;",
-                {"record_id": record_id, "user_id": user_id},
-            )
-            _log_record_event(
-                cur, user_id, kind, record_id, "delete", before=before,
-                message_id=message_id, source=source,
+            before, _ = _soft_delete(
+                cur, user_id, kind, record_id, message_id, source, "delete"
             )
             conn.commit()
     logger.info("Deleted %s #%d for user=%d", kind, record_id, user_id)
     return before
+
+
+# ── Moves between expenses and incomes (Phase 8c) ────────────────────────────────
+#
+# A record registered as the wrong kind is soft-deleted with a 'move' event, and the
+# record that replaces it is created with related_event = that event's id. A 'move'
+# with no event pointing back to it is still waiting for its new record.
+
+
+def move_out_record(
+    user_id: int, kind: str, record_id: int, message_id: int, source: str
+) -> dict:
+    """Soft-delete a record that is moving to the other kind; its new record is created
+    next, in the same message. Returns {"before", "event_id"}."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            before, event_id = _soft_delete(
+                cur, user_id, kind, record_id, message_id, source, "move"
+            )
+            conn.commit()
+    logger.info("Moved out %s #%d for user=%d", kind, record_id, user_id)
+    return {"before": before, "event_id": event_id}
+
+
+def move_record(
+    user_id: int,
+    from_kind: str,
+    record_id: int,
+    to_kind: str,
+    record: dict,
+    message_id: int | None,
+    source: str,
+) -> dict:
+    """Move a record to the other kind in ONE transaction (a move the user confirmed):
+    soft-delete it with a 'move' event and insert `record` as `to_kind`, linked to it.
+    Returns {"before", "record"}, the new record's id in record["id"]."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            before, event_id = _soft_delete(
+                cur, user_id, from_kind, record_id, message_id, source, "move"
+            )
+            record["id"] = _insert_record(
+                cur, to_kind, record, user_id, message_id, source, event_id
+            )
+            conn.commit()
+    logger.info(
+        "Moved %s #%d to %s #%d for user=%d",
+        from_kind, record_id, to_kind, record["id"], user_id,
+    )
+    return {"before": before, "record": record}
+
+
+def get_unreplaced_moves(user_id: int, message_id: int) -> list[dict]:
+    """Records this message moved out whose new record doesn't exist (yet):
+    [{"event_id", "kind", "record_id", "before"}], oldest first."""
+    query = """
+        SELECT m.id AS event_id, m.record_kind AS kind, m.record_id, m.before
+        FROM record_events m
+        WHERE m.user_id = %(user_id)s AND m.message_id = %(message_id)s
+          AND m.action = 'move'
+          AND NOT EXISTS (SELECT 1 FROM record_events r WHERE r.related_event = m.id)
+        ORDER BY m.id;
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, {"user_id": user_id, "message_id": message_id})
+            return [dict(row) for row in cur.fetchall()]
+
+
+def restore_record(
+    user_id: int,
+    kind: str,
+    record_id: int,
+    message_id: int | None,
+    source: str,
+    related_event: int,
+) -> None:
+    """Undo a move that never got its new record: clear deleted_at and log an 'undo'
+    event pointing to the 'move'."""
+    sql = _RECORD_SQL[kind]
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE {sql['table']} SET deleted_at = NULL "
+                "WHERE id = %(record_id)s AND user_id = %(user_id)s "
+                "AND deleted_at IS NOT NULL;",
+                {"record_id": record_id, "user_id": user_id},
+            )
+            if cur.rowcount:
+                cur.execute(_select_records(kind) + " AND r.id = %(record_id)s;",
+                            {"user_id": user_id, "record_id": record_id})
+                _log_record_event(
+                    cur, user_id, kind, record_id, "undo",
+                    after=_snapshot(kind, dict(cur.fetchone())),
+                    message_id=message_id, source=source, related_event=related_event,
+                )
+            conn.commit()
+    logger.info("Restored %s #%d for user=%d", kind, record_id, user_id)
 
 
 def get_incomes(user_id: int, min_date: str, max_date: str) -> list[dict]:

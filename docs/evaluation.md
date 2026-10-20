@@ -95,11 +95,18 @@ Covers the full range of real-world inputs you would actually send:
 Runs the real expense and income agents (`handle()`) against Claude with the database
 stubbed: five fixed expenses and two incomes (`_CORRECTION_RECORDS` in `evals/run.py`), today
 fixed to Thursday 2026-10-22. Scores the first thing the agent did or proposed — `record`,
-`update`, `delete` or `ask` — its target record and changed fields (`args`, containment
-match), and whether it asked for confirmation, with `score_users`. Cases cover swipe-replies
-(amount, category, date, currency, delete), "el último", descriptions, two matches (ask),
-nothing found (ask), a plain new expense, a kind change and a bulk delete (both ask, not
-supported), two quoted records (ask), and incomes.
+`update`, `delete`, `move` or `ask` — its target record and changed fields (`args`,
+containment match), and whether it asked for confirmation, with `score_users`. Cases cover
+swipe-replies (amount, category, date, currency, delete), "el último", descriptions, two
+matches (ask), nothing found (ask), a plain new expense, a bulk delete (ask, not supported),
+two quoted records (ask), incomes, and moves between expense and income (Phase 8c): the
+first half by swipe-reply, by search (confirmation) and as the router phrases it, and the
+second half (`"incoming": <id>` in the case: a record of the other kind moved out just
+before; scored `record` with `replaces`). "ask" means a real question to the user: an
+`ask_user` call, or the agent's final text when it did nothing.
+
+`route_message.json` move cases set `"ordered": true`: the agents must be delegated in that
+order (the record's own agent removes it first).
 
 ```bash
 uv run python -m evals.run --only corrections --check

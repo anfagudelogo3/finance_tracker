@@ -23,7 +23,7 @@ from finance_tracker.storage.database import append_user_prefs
 
 logger = logging.getLogger(__name__)
 
-_RECORD_TOOLS = {"update_record", "delete_record"}
+_RECORD_TOOLS = {"update_record", "delete_record", "move_record"}
 
 
 def ask(user_id: int, action: dict, question: str, now: str, source: str) -> None:

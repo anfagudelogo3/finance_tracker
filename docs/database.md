@@ -220,9 +220,13 @@ Mirrors `expenses` for money coming in.
 
 One row per change to an expense or income; never updated or deleted. It's the audit
 trail and what undo reverts to (Phase 8c). Since Phase 8a every new record writes a
-`create` row in the same transaction (`database.save_expense` / `save_income`); edits,
-deletes, undo and expense ↔ income moves come in 8b–8c. `created_at` on the records
-themselves is never edited. Design: [design/phase-8-corrections.md](design/phase-8-corrections.md).
+`create` row in the same transaction (`database.save_expense` / `save_income`); edits and
+deletes since 8b. **Moves (8c):** the record leaving is soft-deleted with a `move` row, and
+the record replacing it has a `create` row whose `related_event` is that move — a `move`
+nothing points back to is unfinished, and is restored with an `undo` row pointing to it
+(`move_out_record`, `move_record` for a confirmed move in one transaction,
+`get_unreplaced_moves`, `restore_record`). `created_at` on the records themselves is never
+edited. Design: [design/phase-8-corrections.md](design/phase-8-corrections.md).
 
 | Column | Type | Notes |
 |--------|------|-------|

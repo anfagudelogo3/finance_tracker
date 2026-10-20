@@ -269,3 +269,7 @@ MSG_RECORD_CONFIRM_DELETE = "¿Borro este {label}? {record}\n\n1. Sí\n2. No"
 MSG_RECORD_UPDATED = "✏️ {Label} actualizado: {changes}\n{record}"
 MSG_RECORD_DELETED = "🗑️ {Label} borrado: {record}"
 MSG_RECORD_GONE = "No encontré ese registro: puede que ya lo hayas borrado o cambiado."
+# Moves between expenses and incomes (Phase 8c)
+MSG_RECORD_MOVED = "🔄 Pasado a {to_label}: {record}"
+MSG_RECORD_CONFIRM_MOVE = "¿Es este? {record}\n→ Lo paso a {to_label} ({category}).\n\n1. Sí\n2. No"
+MSG_RECORD_MOVE_FAILED = "⚠️ No pude pasar {record} a {to_label}, así que lo dejé como estaba. Intenta de nuevo."

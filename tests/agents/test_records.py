@@ -348,7 +348,7 @@ class TestSearchBeforeRecording:
 
     def test_correction_words_require_a_search_first(self, db):
         with pytest.raises(ValueError, match="find_records"):
-            self._corrections("el almuerzo del lunes fue de 20 mil").check_new_record()
+            self._corrections("el almuerzo del lunes fue de 20 mil").check_new_record([{"amount": 20000}])
 
     def test_after_a_search_a_new_record_is_allowed(self, db):
         corrections = self._corrections("el mercado costó 90 mil")
@@ -356,10 +356,10 @@ class TestSearchBeforeRecording:
             "find_records",
             {"text": "mercado", "amount": None, "date_from": None, "date_to": None, "last": None},
         )
-        corrections.check_new_record()  # no error
+        corrections.check_new_record([{"amount": 90000}])  # no error
 
     def test_plain_new_record_needs_no_search(self, db):
-        self._corrections("almuerzo 20000").check_new_record()
+        self._corrections("almuerzo 20000").check_new_record([{"amount": 20000}])
         db.recent.assert_not_called()
 
 

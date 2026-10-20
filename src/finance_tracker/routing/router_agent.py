@@ -123,6 +123,8 @@ How to route:
 - A message that creates a category and records something in it: call delegate_to_users first, then the recording agent, in that order.
 - "qué categorías tengo" or changing a category is a settings request (delegate_to_users), not a report.
 - Correcting or deleting ONE specific expense or income ("no, eran 15000", "cámbialo a transporte", "borra el último gasto", "el Uber de ayer fue 12000", "el salario fue 2.5 millones") goes to that kind's agent (delegate_to_expenses / delegate_to_incomes), which finds the record and asks the user when needed. When <replied_to> lists the record, put its id in the task ("corrige el gasto #12: el monto es 15000").
+- A record registered as the wrong kind ("este no es un gasto, es un ingreso", "el arriendo de ayer era un ingreso") is moved in two steps, in this order: first its own agent removes it ("bórralo porque se pasa a ingresos: gasto #12" — with the id if <replied_to> lists it, else how to find it); then, using the id from that agent's result notes, the other agent records it again ("regístralo como ingreso: reemplaza el gasto #12"). Wait for the first result before the second call. Never just delete it, never record it as new.
+- If an agent's result has ok=false, read its error: it may say what must happen first; do that, then retry once. Don't repeat a step that already succeeded.
 - Wanting to use the app differently ("ahora es para mi negocio", "quiero cambiar a personal") is a profile change: delegate_to_users, don't ask.
 - <replied_to> means the user swiped to reply to that earlier message (theirs or yours), possibly much older than the conversation. Read the message in its light: "regístralo" replying to their own "almuerzo 20000" → delegate_to_expenses("almuerzo 20000"); "¿y esta semana?" replying to a report → delegate_to_reporting about this week; an answer replying to your question answers that question. Its records are what that message recorded.
 - Use the conversation for follow-ups and for answers to a question you asked: put what the agent needs in the task ("fue un gasto, mercado" after "nequi 50000" → delegate_to_expenses("mercado 50000 con nequi")).
@@ -232,10 +234,12 @@ def route(
             delegations.append(
                 Delegation(agent, task, ok=response.ok, reply_text=response.reply_text)
             )
-            return json.dumps(
-                {"ok": response.ok, "reply_text": response.reply_text},
-                ensure_ascii=False,
-            )
+            result = {"ok": response.ok, "reply_text": response.reply_text}
+            if not response.ok and response.error:
+                result["error"] = response.error
+            if response.notes:
+                result["notes"] = response.notes  # what's left for another agent
+            return json.dumps(result, ensure_ascii=False)
         if name == "ask_clarification":
             questions.append(tool_input.get("question", "").strip())
             return "The question will be sent to the user."
@@ -280,11 +284,10 @@ def route(
 def _compose_reply(outcome, delegations, questions, declined) -> str:
     parts = []
     for d in delegations:
-        parts.append(
-            d.reply_text
-            if d.ok and d.reply_text
-            else MSG_DELEGATION_FAILED.format(task=d.task)
-        )
+        if not d.ok:
+            parts.append(MSG_DELEGATION_FAILED.format(task=d.task))
+        elif d.reply_text:  # a step with nothing to say (first half of a move) adds nothing
+            parts.append(d.reply_text)
     parts += [q for q in questions if q]
 
     if outcome.status == agent_loop.REFUSAL:
@@ -297,6 +300,8 @@ def _compose_reply(outcome, delegations, questions, declined) -> str:
         return "\n\n".join(parts + [MSG_PARTIAL_TIMEOUT]) if parts else MSG_ERROR
     if parts:
         return "\n\n".join(parts)
+    if delegations:
+        return ""  # steps ran with nothing to say; the orchestrator adds what's missing
     if declined:
         return MSG_OUT_OF_SCOPE
     return outcome.final_text or MSG_ROUTER_EMPTY
