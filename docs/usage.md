@@ -56,7 +56,12 @@ For each expense the model fills in:
   `entretenimiento`, `hogar`, `educacion`, `ropa`, `servicios`, `otro`
 - **payment_method** — e.g. `tarjeta`, `efectivo`, `nequi` (optional)
 - **merchant** — a brand or place if mentioned (optional)
+- **date** — the day it happened, if you say it: *"ayer gasté 10 mil"*, *"el lunes"*,
+  *"el 15 de octubre"*. Otherwise the day you sent the message. A future date
+  (*"mañana pago el arriendo"*) isn't recorded: the bot asks you to tell it once it's paid.
 - **description** — a short summary of the expense
+
+The same applies to incomes (*"ayer me pagaron la quincena"*).
 
 If the bot can't make sense of the message it replies:
 

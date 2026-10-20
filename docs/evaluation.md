@@ -90,6 +90,24 @@ Covers the full range of real-world inputs you would actually send:
 | USD | `"suscripción ChatGPT 20 dólares"` |
 | Multi-expense | `"almuerzo 20 luca y cine 40 mil"` |
 
+#### `record_dates.json` — 16 cases
+
+The date each expense or income **happened** ("ayer gasté 10 mil" → yesterday), not when it
+was ingested (`created_at`). Cases run through the expense/income agents' extraction with a
+fixed today (Thursday 2026-10-22, `_RECORD_DATES_TODAY` in `evals/run.py`) so expected
+dates never move, then through the same resolution `handle()` applies: the date words
+(`date_text`) are turned into a date by code (`core/dates.parse_date_text`) for the common
+forms, the model's own `date` only for the rest, and no date → the message's date. Code
+does the arithmetic because the model alone got "el 28" (on the 22nd → last month) and
+"el 3" (→ this month) wrong in early runs. Scored with `score_expense` on `amount` and `date`. Covers ayer,
+anteayer, weekdays, "el viernes pasado", a day with and without a month (including a day
+that falls in the previous month), "hoy", no date, two dates in one message, and a future
+date (extracted as such; the agent then refuses to record it, which is unit-tested).
+
+```bash
+uv run python -m evals.run --only records --check   # expense_agent, income_agent, record_dates
+```
+
 #### `parse_report_request.json` — 12 cases
 
 All anchored to `2026-06-25T10:00:00-05:00` (a Thursday in Colombia, UTC-5).

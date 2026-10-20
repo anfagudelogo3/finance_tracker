@@ -15,7 +15,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -26,6 +26,7 @@ from finance_tracker.legacy.openai_parser import parse_expense, parse_report_req
 from finance_tracker.agents.expenses import _extract as _extract_expense_claude
 from finance_tracker.agents.incomes import _extract as _extract_income_claude
 from finance_tracker.agents.reporting import resolve_date_range
+from finance_tracker.core.dates import resolve_record_date
 from finance_tracker.routing.fast_paths import (
     fast_route,
     is_income_request,
@@ -82,6 +83,11 @@ THRESHOLDS: dict[str, dict[str, float]] = {
     "users_agent": {
         "overall": 0.85,
         "action": 0.90,
+    },
+    # Dates mentioned in a message ("ayer", "el lunes", "el 15"). Provisional.
+    "record_dates": {
+        "overall": 0.90,
+        "date": 0.90,
     },
     "parse_expense": {
         "overall": 0.85,
@@ -168,6 +174,44 @@ def _run_income_agent() -> tuple[list[dict], dict]:
         "parse_income",
         lambda text: _extract_income_claude(text, DEFAULT_INCOME_CATEGORIES),
     )
+
+
+# record_dates.json is written against a fixed "today" so expected dates never move
+_RECORD_DATES_TODAY = date(2026, 10, 22)  # a Thursday
+
+
+def _run_record_dates() -> tuple[list[dict], dict]:
+    """The date each expense/income happened ("ayer gasté 10 mil" → yesterday), through
+    the agents' extraction step plus the same resolution handle() applies (no date → the
+    message's date). Cases are scored with score_expense on amount and date."""
+    extractors = {
+        "expense": lambda text: _extract_expense_claude(
+            text, DEFAULT_EXPENSE_CATEGORIES, today=_RECORD_DATES_TODAY
+        ),
+        "income": lambda text: _extract_income_claude(
+            text, DEFAULT_INCOME_CATEGORIES, today=_RECORD_DATES_TODAY
+        ),
+    }
+    scores = []
+    for case in _load_dataset("record_dates"):
+        records = extractors[case["kind"]](case["input"])
+        for record in records:
+            resolved, _ = resolve_record_date(
+                record.get("date"), _RECORD_DATES_TODAY, record.get("date_text")
+            )
+            record["date"] = resolved.isoformat()
+        score = score_expense(records, case["expected"])
+        score["id"] = case["id"]
+        scores.append(score)
+
+    n = len(scores)
+    metrics: dict[str, int | float] = {"n": n}
+    metrics["overall"] = sum(1 for s in scores if s["all_correct"]) / n
+    for field in ("amount", "date"):
+        hits = [f[field]["correct"] for s in scores for e in s.get("expenses", [])
+                for f in [e["fields"]] if field in f]
+        metrics[field] = sum(hits) / len(hits) if hits else 0.0
+    return scores, metrics
 
 
 def _run_date_range_dataset(dataset_name: str, resolve_fn) -> tuple[list[dict], dict]:
@@ -497,8 +541,11 @@ def main() -> None:
     )
     arg_parser.add_argument(
         "--only",
-        choices=["routing", "users"],
-        help="Run a single eval group. 'routing' and 'users' need only ANTHROPIC_API_KEY.",
+        choices=["routing", "users", "records"],
+        help=(
+            "Run a single eval group (each needs only ANTHROPIC_API_KEY): routing, users, "
+            "or records (expense/income extraction and record dates)."
+        ),
     )
     args = arg_parser.parse_args()
 
@@ -509,6 +556,14 @@ def main() -> None:
         if setup_tracing():
             print("Phoenix tracing enabled.")
         _finish(_run_routing_sections(args.check, has_anthropic_key))
+        return
+
+    if args.only == "records":
+        if not has_anthropic_key:
+            sys.exit("ANTHROPIC_API_KEY not configured. Add it to your .env file.")
+        if setup_tracing():
+            print("Phoenix tracing enabled.")
+        _finish(_run_records_section(args.check))
         return
 
     if args.only == "users":
@@ -543,17 +598,7 @@ def main() -> None:
     threshold_failures.extend(_run_routing_sections(args.check, has_anthropic_key))
 
     if has_anthropic_key:
-        print("\nRunning expense_agent (Claude) against the same dataset for parity...")
-        scores_agent, metrics_agent = _run_expense_agent()
-        _print_section("expense_agent (Claude)", scores_agent, metrics_agent)
-        if args.check:
-            threshold_failures.extend(_check_thresholds("expense_agent", metrics_agent))
-
-        print("\nRunning income_agent (Claude) against parse_income.json...")
-        scores_income, metrics_income = _run_income_agent()
-        _print_section("income_agent (Claude)", scores_income, metrics_income)
-        if args.check:
-            threshold_failures.extend(_check_thresholds("income_agent", metrics_income))
+        threshold_failures.extend(_run_records_section(args.check))
 
         print(
             "\nRunning reporting_agent (deterministic + Claude fallback) for parity..."
@@ -600,6 +645,26 @@ def _run_routing_sections(check: bool, has_anthropic_key: bool) -> list[str]:
     _print_section("routing — hybrid (production)", scores_hybrid, metrics_hybrid)
     if check:
         failures.extend(_check_thresholds("hybrid_routing", metrics_hybrid))
+    return failures
+
+
+def _run_records_section(check: bool) -> list[str]:
+    """Expense and income extraction (Claude) plus the dates they happened."""
+    failures: list[str] = []
+    print("\nRunning expense_agent (Claude) against parse_expense.json...")
+    scores, metrics = _run_expense_agent()
+    _print_section("expense_agent (Claude)", scores, metrics)
+    failures += _check_thresholds("expense_agent", metrics) if check else []
+
+    print("\nRunning income_agent (Claude) against parse_income.json...")
+    scores, metrics = _run_income_agent()
+    _print_section("income_agent (Claude)", scores, metrics)
+    failures += _check_thresholds("income_agent", metrics) if check else []
+
+    print("\nRunning record dates (expense + income agents) against record_dates.json...")
+    scores, metrics = _run_record_dates()
+    _print_section("record_dates", scores, metrics)
+    failures += _check_thresholds("record_dates", metrics) if check else []
     return failures
 
 

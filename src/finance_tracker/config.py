@@ -233,3 +233,13 @@ MSG_CURRENCY_CHANGED = "✅ Tu moneda principal ahora es {code}."
 # Reply context (Phase 7a) — WhatsApp swipe-replies
 REPLIED_TO_MAX_CHARS = 400               # quoted text passed to the router (reports can be long)
 REPLIED_TO_FETCH_TIMEOUT_SECONDS = 3     # Twilio fallback when the SID isn't stored
+
+# Record dates ("ayer gasté 10 mil") — core/dates.py. A future date isn't recorded.
+MSG_FUTURE_EXPENSE = (
+    "📅 No registré {currency} {amount} ({description}) porque la fecha {date} aún no llega. "
+    "Si ya lo pagaste, dime cuándo."
+)
+MSG_FUTURE_INCOME = (
+    "📅 No registré {currency} {amount} ({description}) porque la fecha {date} aún no llega. "
+    "Si ya lo recibiste, dime cuándo."
+)

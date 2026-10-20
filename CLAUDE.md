@@ -56,7 +56,7 @@ Because Excel is checked first, "exportame el resumen" is an Excel request, not 
 
 **Idempotency:** `save_message` uses `ON CONFLICT (whatsapp_message_id) DO NOTHING` and returns `None` on a duplicate; the handler short-circuits with `200`. Twilio retries are therefore safe.
 
-**Dates:** `America/Bogota` (`config.TIMEZONE`, `zoneinfo`) everywhere — the handler stamps `now`, the expense/income agents take the record date from `request.now` (so a message held during onboarding keeps its date), and `database.get_connection` sets the session timezone so SQL defaults agree. Do not fall back to naive `datetime.now()`.
+**Dates:** `America/Bogota` (`config.TIMEZONE`, `zoneinfo`) everywhere — the handler stamps `now`; the expense/income agents ask Claude for the words that say when the money moved (`date_text`: "ayer", "el lunes", "el 28") plus its own reading (`date`); `core/dates.resolve_record_date` computes the date from the words in code for the common forms (the model's day arithmetic isn't reliable), falls back to the model's date otherwise, relative to the message's date (`request.now`, so a message held during onboarding keeps its date); none → the message's date; future → not recorded. `created_at` is the ingest time, set by the database and never edited; and `database.get_connection` sets the session timezone so SQL defaults agree. Do not fall back to naive `datetime.now()`.
 
 ### Package layout (`src/finance_tracker/`)
 
