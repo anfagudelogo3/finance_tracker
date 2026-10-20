@@ -424,16 +424,103 @@ def append_user_prefs(
 
 # ── Conversation memory ──────────────────────────────────────────────────────────
 
-def save_turn(user_id: int, role: str, content: str) -> None:
-    """Append a turn to the conversation history. role is 'user' or 'assistant'."""
+def save_turn(
+    user_id: int,
+    role: str,
+    content: str,
+    external_id: str | None = None,
+    message_id: int | None = None,
+) -> None:
+    """Append a turn to the conversation history. role is 'user' or 'assistant'.
+
+    external_id is the Twilio SID of an outbound message (so a swipe-reply to it can be
+    resolved); message_id is the inbound message the turn is (user) or answers
+    (assistant), which links a bot confirmation to the records that message created.
+    """
     query = """
-        INSERT INTO conversation_turns (user_id, role, content)
-        VALUES (%(user_id)s, %(role)s, %(content)s);
+        INSERT INTO conversation_turns (user_id, role, content, external_id, message_id)
+        VALUES (%(user_id)s, %(role)s, %(content)s, %(external_id)s, %(message_id)s)
+        ON CONFLICT (external_id) DO NOTHING;
     """
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, {"user_id": user_id, "role": role, "content": content})
+            cur.execute(query, {
+                "user_id": user_id,
+                "role": role,
+                "content": content,
+                "external_id": external_id,
+                "message_id": message_id,
+            })
             conn.commit()
+
+
+# ── Reply context (WhatsApp swipe-replies) ───────────────────────────────────────
+
+
+def find_replied_message(user_id: int, sid: str) -> dict | None:
+    """Find a quoted message by its Twilio SID, only among this user's messages.
+
+    The user's own messages live in `messages` (by whatsapp_message_id); the bot's in
+    `conversation_turns` (by external_id). Returns {role, text, created_at, message_id}
+    or None when it isn't stored.
+    """
+    params = {"user_id": user_id, "sid": sid}
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id AS message_id, raw_text, transcript, created_at
+                FROM messages
+                WHERE user_id = %(user_id)s AND whatsapp_message_id = %(sid)s;
+                """,
+                params,
+            )
+            row = cur.fetchone()
+            if row is not None:
+                return {
+                    "role": "user",
+                    "text": row["transcript"] or row["raw_text"] or "",
+                    "created_at": row["created_at"],
+                    "message_id": row["message_id"],
+                }
+            cur.execute(
+                """
+                SELECT content, created_at, message_id FROM conversation_turns
+                WHERE user_id = %(user_id)s AND external_id = %(sid)s;
+                """,
+                params,
+            )
+            row = cur.fetchone()
+    if row is None:
+        return None
+    return {
+        "role": "assistant",
+        "text": row["content"],
+        "created_at": row["created_at"],
+        "message_id": row["message_id"],
+    }
+
+
+def get_message_records(user_id: int, message_id: int) -> list[dict]:
+    """The live expenses and incomes created from one inbound message, oldest first."""
+    query = """
+        SELECT 'expense' AS kind, e.id, e.amount, e.currency, c.name AS category,
+               e.expense_date AS date, e.description
+        FROM expenses e JOIN categories c ON c.id = e.category_id
+        WHERE e.user_id = %(user_id)s AND e.message_id = %(message_id)s
+          AND e.deleted_at IS NULL
+        UNION ALL
+        SELECT 'income' AS kind, i.id, i.amount, i.currency, c.name AS category,
+               i.income_date AS date, i.description
+        FROM incomes i JOIN categories c ON c.id = i.category_id
+        WHERE i.user_id = %(user_id)s AND i.message_id = %(message_id)s
+          AND i.deleted_at IS NULL
+        ORDER BY kind, id;
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, {"user_id": user_id, "message_id": message_id})
+            return [dict(row) for row in cur.fetchall()]
 
 
 def load_recent_turns(

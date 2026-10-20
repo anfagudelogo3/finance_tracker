@@ -1,11 +1,24 @@
 import logging
 
+from twilio.http.http_client import TwilioHttpClient
 from twilio.rest import Client
 
-from finance_tracker.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER
+from finance_tracker.config import (
+    REPLIED_TO_FETCH_TIMEOUT_SECONDS,
+    TWILIO_ACCOUNT_SID,
+    TWILIO_AUTH_TOKEN,
+    TWILIO_WHATSAPP_NUMBER,
+)
 
 logger = logging.getLogger(__name__)
 _client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+# Separate client for the reply-context fallback: a short timeout, so a slow Twilio API
+# can't eat the webhook's time budget
+_fetch_client = Client(
+    TWILIO_ACCOUNT_SID,
+    TWILIO_AUTH_TOKEN,
+    http_client=TwilioHttpClient(timeout=REPLIED_TO_FETCH_TIMEOUT_SECONDS),
+)
 
 
 def send_message(to: str, text: str) -> str:
@@ -18,6 +31,25 @@ def send_message(to: str, text: str) -> str:
     )
     logger.debug("Twilio message created with SID: %s", message.sid)
     return message.sid
+
+
+def fetch_message(sid: str) -> dict | None:
+    """Fetch one message from Twilio by SID: the fallback for a swipe-reply to a message
+    we don't have stored (normally never needed). Short timeout; None on any failure.
+
+    Returns {from, to, body, date_sent}; the caller must check it belongs to the user.
+    """
+    try:
+        message = _fetch_client.messages(sid).fetch()
+    except Exception:
+        logger.warning("Could not fetch replied-to message %s from Twilio", sid, exc_info=True)
+        return None
+    return {
+        "from": message.from_,
+        "to": message.to,
+        "body": message.body or "",
+        "date_sent": message.date_sent or message.date_created,
+    }
 
 
 def send_document(to: str, media_url: str, filename: str) -> str:

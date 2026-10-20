@@ -21,7 +21,9 @@ _CASES = [
 def test_fast_path_is_never_wrong_on_routing_dataset(case):
     """A fast path has no LLM behind it to catch mistakes: when it fires it must match
     the expected single agent. Returning None (→ router) is always acceptable."""
-    agent = fast_route(case["input"], case["profile"], case.get("conversation"))
+    agent = fast_route(
+        case["input"], case["profile"], case.get("conversation"), case.get("replied_to")
+    )
     if agent is not None:
         assert case["expected"] == {"route": "agents", "agents": [agent]}
 
@@ -72,3 +74,10 @@ def test_answer_to_a_pending_question_goes_to_router():
 
 def test_missing_profile_counts_as_personal():
     assert fast_route("almuerzo 32000", None) == "expenses"
+
+
+def test_swipe_replies_never_take_a_fast_path():
+    """'200000' replying to '¿gasto o ingreso?' isn't a plain expense."""
+    personal = {"type": "personal"}
+    assert fast_route("almuerzo 20000", personal) == "expenses"
+    assert fast_route("almuerzo 20000", personal, replied_to={"role": "assistant"}) is None

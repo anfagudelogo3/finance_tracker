@@ -56,7 +56,19 @@ class TestExtractMessage:
             "text": "almuerzo 32000",
             "message_id": "SMxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
             "media": [],
+            "replied_to_sid": None,
+            "replied_to_sender": None,
         }
+
+    def test_swipe_reply_parameters(self):
+        params = {
+            **self._make_params("eran 15000"),
+            "OriginalRepliedMessageSid": "SMquoted",
+            "OriginalRepliedMessageSender": "whatsapp:+14155238886",
+        }
+        result = extract_message(params)
+        assert result["replied_to_sid"] == "SMquoted"
+        assert result["replied_to_sender"] == "whatsapp:+14155238886"
 
     def test_strips_whatsapp_prefix(self):
         result = extract_message(self._make_params())
