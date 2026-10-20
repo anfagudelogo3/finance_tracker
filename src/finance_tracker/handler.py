@@ -18,7 +18,9 @@ from finance_tracker.config import (
     DEFAULT_PROFILE,
     DEFAULT_CURRENCY,
     TIMEZONE,
+    REPLY_RESERVE_SECONDS,
 )
+from finance_tracker.core import deadline
 from finance_tracker.channels.whatsapp.webhook import verify_signature, extract_message
 from finance_tracker.legacy.openai_parser import (
     parse_expense_from_image,
@@ -47,13 +49,24 @@ from finance_tracker.storage.media import store_all_media
 from finance_tracker.channels.whatsapp.sender import send_message, send_document, format_confirmation
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+# The whole package, not just this module: Lambda's root logger is at WARNING, which
+# hid the agents' per-call timing and token logs
+logging.getLogger("finance_tracker").setLevel(logging.INFO)
 
 
 def handler(event, context):
     """AWS Lambda entry point for the Twilio WhatsApp webhook."""
     method = event.get("requestContext", {}).get("http", {}).get("method", "")
     logger.info("Incoming request", extra={"method": method})
+
+    # One time budget for everything this message does, ending early enough to still
+    # send a reply: a Lambda that hits its own timeout dies without answering
+    if context is not None:
+        deadline.start(
+            context.get_remaining_time_in_millis() / 1000 - REPLY_RESERVE_SECONDS
+        )
+    else:
+        deadline.clear()
 
     if method == "POST":
         return _handle_message(event)

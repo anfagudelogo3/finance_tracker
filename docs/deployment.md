@@ -93,8 +93,8 @@ Defaults: function `financeTrackerLambda`, region `us-east-2` (override with
 |---------|-------|-------|
 | `Runtime` | `python3.12` | Must match the build target |
 | `Handler` | `handler.handler` | `lambda/handler.py` at the zip root |
-| `Timeout` | 20 s | Router loop budget is 12 s (`AGENT_LOOP_TIMEOUT_SECONDS`) + one specialist call; image (vision) messages are the slowest path |
-| `MemorySize` | 150 MB | Check **Max Memory Used** in the CloudWatch `REPORT` lines after real traffic; Lambda CPU also scales with memory, so a low value means slower cold starts and LLM-response parsing |
+| `Timeout` | 40 s | Each message's deadline (`core/deadline.py`) is the time left minus `REPLY_RESERVE_SECONDS` (5 s), so a slow message still gets a reply; a settings change or a correction (router + specialist + closing calls) is the slowest Claude path |
+| `MemorySize` | 512 MB | At 150 MB every request used all of it (**Max Memory Used** in the CloudWatch `REPORT` lines) and a cold start took 6 s; Lambda CPU also scales with memory |
 | `EphemeralStorage` | 512 MB | Lambda's default `/tmp` |
 | `Environment` | `CONFIG_SSM_PATH` only | Everything else comes from SSM |
 

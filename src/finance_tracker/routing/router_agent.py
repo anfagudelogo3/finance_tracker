@@ -18,7 +18,6 @@ from typing import Callable
 
 from finance_tracker.agents import expenses, incomes, reporting, users
 from finance_tracker.config import (
-    AGENT_LOOP_TIMEOUT_SECONDS,
     CLAUDE_ROUTER_MODEL,
     MSG_DELEGATION_FAILED,
     MSG_ERROR,
@@ -253,7 +252,6 @@ def route(
         messages=[{"role": "user", "content": _user_content(request)}],
         execute_tool=execute_tool,
         max_iterations=ROUTER_MAX_ITERATIONS,
-        timeout_seconds=AGENT_LOOP_TIMEOUT_SECONDS,
         max_tokens=ROUTER_MAX_TOKENS,
         output_config={"effort": ROUTER_EFFORT},
     )
@@ -292,7 +290,10 @@ def _compose_reply(outcome, delegations, questions, declined) -> str:
     if outcome.status == agent_loop.REFUSAL:
         return "\n\n".join(parts + [MSG_OUT_OF_SCOPE]) if parts else MSG_OUT_OF_SCOPE
     if outcome.status != agent_loop.END_TURN:
-        # Safeguard tripped: report what was done, never drop it silently
+        # Safeguard tripped: report what was done, never drop it silently (a specialist
+        # that stopped early already added the note)
+        if any(MSG_PARTIAL_TIMEOUT in p for p in parts):
+            return "\n\n".join(parts)
         return "\n\n".join(parts + [MSG_PARTIAL_TIMEOUT]) if parts else MSG_ERROR
     if parts:
         return "\n\n".join(parts)

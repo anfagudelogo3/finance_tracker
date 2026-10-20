@@ -46,6 +46,7 @@ from finance_tracker.config import (
     ONBOARDING_MAX_CATEGORIES,
     TIMEZONE,
 )
+from finance_tracker.core import deadline
 from finance_tracker.core.claude_client import client
 from finance_tracker.core.text import normalize_answer
 from finance_tracker.storage.database import append_user_prefs, set_user_categories
@@ -550,6 +551,7 @@ def _call_tool(system: str, text: str, tool: dict) -> dict:
         messages=[{"role": "user", "content": text}],
         tools=[tool],
         tool_choice={"type": "tool", "name": tool["name"]},
+        **deadline.call_options(),
     )
     block = next(b for b in response.content if b.type == "tool_use")
     logger.debug("Onboarding %s → %s", tool["name"], block.input)

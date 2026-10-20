@@ -2,8 +2,9 @@
 
 The model's stop_reason is the stopping mechanism: the loop keeps going while Claude
 asks for tools (`tool_use`) and finishes normally on `end_turn`, so a multi-step task
-is never cut off midway. max_iterations and the wall-clock budget are safeguards for a
-loop that isn't converging, not the expected way out. See docs/agent-roadmap.md §4.3.
+is never cut off midway. max_iterations and the message's deadline (core/deadline.py)
+are safeguards for a loop that isn't converging, not the expected way out. See
+docs/agent-roadmap.md §4.3.
 """
 
 import json
@@ -11,6 +12,9 @@ import logging
 import time
 from dataclasses import dataclass, field
 from typing import Callable
+
+from finance_tracker.config import CLAUDE_MIN_CALL_SECONDS
+from finance_tracker.core import deadline
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +51,8 @@ def run_tool_loop(
     messages: list[dict],
     execute_tool: Callable[[str, dict], str],
     max_iterations: int,
-    timeout_seconds: float,
     max_tokens: int,
     output_config: dict | None = None,
-    clock: Callable[[], float] = time.monotonic,
 ) -> LoopOutcome:
     """Run Claude with `tools` until it ends its turn (or a safeguard trips).
 
@@ -59,16 +61,21 @@ def run_tool_loop(
     failing tool doesn't abort the others. `messages` is extended in place, append-only:
     assistant content is sent back exactly as received (thinking blocks included).
     """
-    started = clock()
     outcome = LoopOutcome(status=MAX_ITERATIONS)
     extra = {"output_config": output_config} if output_config else {}
 
     for iteration in range(1, max_iterations + 1):
-        if clock() - started > timeout_seconds:
-            logger.warning("Agent loop timed out after %d iteration(s)", iteration - 1)
+        left = deadline.remaining()
+        if left is not None and left < CLAUDE_MIN_CALL_SECONDS:
+            logger.warning(
+                "Agent loop out of time after %d iteration(s) (%.1f s left)",
+                iteration - 1,
+                left,
+            )
             outcome.status = TIMEOUT
             return outcome
 
+        started = time.monotonic()
         response = client.messages.create(
             model=model,
             max_tokens=max_tokens,
@@ -77,13 +84,17 @@ def run_tool_loop(
             tool_choice={"type": "auto"},
             messages=messages,
             **extra,
+            **deadline.call_options(),
         )
         outcome.iterations = iteration
         usage = getattr(response, "usage", None)
         logger.info(
-            "Agent loop iteration=%d stop_reason=%s input_tokens=%s output_tokens=%s",
+            "Agent loop model=%s iteration=%d stop_reason=%s seconds=%.2f "
+            "input_tokens=%s output_tokens=%s",
+            model,
             iteration,
             response.stop_reason,
+            time.monotonic() - started,
             getattr(usage, "input_tokens", None),
             getattr(usage, "output_tokens", None),
         )

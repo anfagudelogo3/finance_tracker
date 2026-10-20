@@ -20,8 +20,11 @@ from finance_tracker.config import (
     DEFAULT_CURRENCY,
     DEFAULT_PROFILE,
     MSG_ACTION_CANCELLED,
+    MSG_BUSINESS_UPDATED,
+    MSG_CATEGORY_ADDED,
     MSG_CATEGORY_DEACTIVATED,
     MSG_CATEGORY_MERGED,
+    MSG_CATEGORY_REACTIVATED,
     MSG_CATEGORY_RENAMED,
     MSG_CONFIRM_CURRENCY,
     MSG_CONFIRM_DEACTIVATE,
@@ -35,7 +38,6 @@ from finance_tracker.config import (
     USERS_EFFORT,
     USERS_MAX_ITERATIONS,
     USERS_MAX_TOKENS,
-    USERS_TIMEOUT_SECONDS,
 )
 from finance_tracker.agents import pending
 from finance_tracker.core import agent_loop
@@ -306,7 +308,6 @@ def handle(request: AgentRequest) -> AgentResponse:
         messages=[{"role": "user", "content": _user_content(request)}],
         execute_tool=execute_tool,
         max_iterations=USERS_MAX_ITERATIONS,
-        timeout_seconds=USERS_TIMEOUT_SECONDS,
         max_tokens=USERS_MAX_TOKENS,
         output_config={"effort": USERS_EFFORT},
     )
@@ -320,13 +321,16 @@ def handle(request: AgentRequest) -> AgentResponse:
 
     parts = [p for p in (outcome.final_text.strip(), *confirmation) if p]
     if outcome.status != agent_loop.END_TURN:
-        reply = (
-            "\n\n".join(parts + [MSG_PARTIAL_TIMEOUT])
-            if (changes or confirmation)
-            else MSG_ERROR
-        )
+        if not (changes or confirmation):
+            return AgentResponse(ok=False, reply_text=MSG_ERROR, error=outcome.status)
+        # Stopped early (before the closing call wrote the reply): what was already
+        # applied is still reported, written in code
+        done = [line for line in map(_change_line, changes) if line]
         return AgentResponse(
-            ok=False, reply_text=reply, data=changes or None, error=outcome.status
+            ok=True,
+            reply_text="\n\n".join(done + parts + [MSG_PARTIAL_TIMEOUT]),
+            data=changes or None,
+            error=outcome.status,
         )
     return AgentResponse(
         ok=True, reply_text="\n\n".join(parts) or MSG_ROUTER_EMPTY, data=changes or None
@@ -355,17 +359,24 @@ def apply_confirmed(user_id: int, action: dict) -> tuple[str, dict]:
             "default_currency": action["code"]
         }
 
-    result = _apply(user_id, action)
-    status = result["status"]
+    return _change_line(_apply(user_id, action)) or MSG_ACTION_CANCELLED, {}
+
+
+def _change_line(change: dict) -> str | None:
+    """The reply line for one applied change; None when nothing changed."""
+    status = change["status"]
+    if status == "added":
+        return MSG_CATEGORY_ADDED.format(name=change["name"])
+    if status == "reactivated":
+        return MSG_CATEGORY_REACTIVATED.format(name=change["name"])
     if status == "renamed":
-        return MSG_CATEGORY_RENAMED.format(old=result["old"], name=result["name"]), {}
+        return MSG_CATEGORY_RENAMED.format(old=change["old"], name=change["name"])
     if status == "merged":
-        return (
-            MSG_CATEGORY_MERGED.format(
-                old=result["old"], name=result["name"], records=result.get("records", 0)
-            ),
-            {},
+        return MSG_CATEGORY_MERGED.format(
+            old=change["old"], name=change["name"], records=change.get("records", 0)
         )
     if status == "deactivated":
-        return MSG_CATEGORY_DEACTIVATED.format(name=result["name"]), {}
-    return MSG_ACTION_CANCELLED, {}
+        return MSG_CATEGORY_DEACTIVATED.format(name=change["name"])
+    if status == "updated":
+        return MSG_BUSINESS_UPDATED
+    return None

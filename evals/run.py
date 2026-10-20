@@ -476,7 +476,8 @@ def _users_decide(case: dict) -> dict:
         with patch.object(users_agent, "get_category_overview", return_value=overview), \
                 patch.object(users_agent, "get_user_prefs", return_value=prefs), \
                 patch.object(users_agent, "change_category", side_effect=change_category), \
-                patch.object(users_agent, "append_user_prefs", side_effect=append_user_prefs):
+                patch.object(users_agent, "append_user_prefs", side_effect=append_user_prefs), \
+                patch.object(pending_actions, "append_user_prefs", side_effect=append_user_prefs):
             users_agent.handle(request)
     except Exception as exc:  # an API error is a failed case, not a crashed run
         return {"action": f"error:{type(exc).__name__}", "args": {}, "confirmation": False}

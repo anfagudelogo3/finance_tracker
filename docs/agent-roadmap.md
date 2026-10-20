@@ -195,10 +195,17 @@ return _safeguard_reply(executed, reason="max_iterations")
   ping-pong, the model not converging). The loop logs a warning with the trace and replies with
   what was already done. Specialist writes are already persisted and get listed from the
   collected `tool_result`s, so no work is silently dropped.
-- **Wall-clock budget:** `config.AGENT_LOOP_TIMEOUT_SECONDS` is checked before each call, kept
-  under Twilio's 15 s webhook timeout. Twilio retries are already safe because `save_message` is
-  idempotent.
-- **Observability:** stop reason and `response.usage` are logged per iteration, so logs and
+- **One deadline per message** (`core/deadline.py`): the handler starts it from the Lambda's
+  remaining time minus `REPLY_RESERVE_SECONDS`, and every loop and Claude call in the message
+  draws from it, nested loops included. A loop doesn't start a call with less than
+  `CLAUDE_MIN_CALL_SECONDS` left, and each call's timeout (retry included) ends before the
+  deadline, so the handler always has time to answer. It replaced fixed per-loop timeouts (12 s
+  router, 8 s specialists) that stacked badly: on 2026-10-20 a settings change was applied, but
+  both loops ran out before their closing calls and the user was told it had failed. A specialist
+  that stops early still reports in code what it already did. Replies go out through Twilio's
+  API, not the webhook response, so a message slower than Twilio's 15 s webhook timeout still gets
+  its answer (Twilio logs error 11200; a retry is ignored because `save_message` is idempotent).
+- **Observability:** stop reason, call duration and `response.usage` are logged per iteration, so logs and
   Phoenix show how many iterations real messages take. Tune `max_iterations` from that data, not
   by guesswork.
 - **Alternative:** `client.beta.messages.tool_runner` would also work. The hand-written loop was
@@ -457,7 +464,7 @@ latency, tokens and cost per message.
 - **Input:** conversation and message go in one user turn as tagged data
   (`<conversation>…</conversation><message>…</message>`), capped at `ROUTER_MAX_INPUT_CHARS`.
 - **Limits:** `ROUTER_MAX_ITERATIONS=6`, `ROUTER_MAX_DELEGATIONS=3`,
-  `AGENT_LOOP_TIMEOUT_SECONDS=12`.
+  `AGENT_LOOP_TIMEOUT_SECONDS=12` (later replaced by one deadline per message, §4.3).
 - **Preferences:** profiles are read from the append-only `user_prefs` table (latest row,
   §5.1); `database.append_user_prefs` is the only writer, ready for Phase 6.
 - **Evals:** `uv run python -m evals.run --only routing` runs the keyword baseline, the router

@@ -579,3 +579,27 @@ class TestReplyContextWiring:
         assert inbound.kwargs == {"message_id": 55}
         assert outbound.args[1] == "assistant"
         assert outbound.kwargs == {"external_id": "SMout", "message_id": 55}
+
+
+class TestDeadline:
+    def test_lambda_time_left_minus_the_reply_reserve(self):
+        from finance_tracker import handler
+        from finance_tracker.config import REPLY_RESERVE_SECONDS
+        from finance_tracker.core import deadline
+
+        context = MagicMock()
+        context.get_remaining_time_in_millis.return_value = 40_000
+        with patch.object(handler, "_handle_message", return_value={"statusCode": 200}):
+            handler.handler({"requestContext": {"http": {"method": "POST"}}}, context)
+
+        assert 40 - REPLY_RESERVE_SECONDS - 1 < deadline.remaining() <= 40 - REPLY_RESERVE_SECONDS
+
+    def test_no_context_no_deadline(self):
+        from finance_tracker import handler
+        from finance_tracker.core import deadline
+
+        deadline.start(5)
+        with patch.object(handler, "_handle_message", return_value={"statusCode": 200}):
+            handler.handler({"requestContext": {"http": {"method": "POST"}}}, None)
+
+        assert deadline.remaining() is None

@@ -13,7 +13,6 @@ from finance_tracker.config import (
     CLAUDE_EXTRACTION_MODEL,
     MSG_ERROR,
     RECORD_AGENT_MAX_ITERATIONS,
-    RECORD_AGENT_TIMEOUT_SECONDS,
     DEFAULT_CURRENCY,
     DEFAULT_INCOME_CATEGORIES,
     MSG_EMPTY_INCOME,
@@ -139,7 +138,6 @@ def _run(
         messages=[{"role": "user", "content": content}],
         execute_tool=execute_tool,
         max_iterations=RECORD_AGENT_MAX_ITERATIONS,
-        timeout_seconds=RECORD_AGENT_TIMEOUT_SECONDS,
         max_tokens=1024,
     )
 
