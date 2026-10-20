@@ -8,6 +8,9 @@ from finance_tracker.storage.database import (
     save_income,
     get_expenses,
     get_incomes,
+    get_recent_records,
+    update_record,
+    delete_record,
     get_or_create_user,
     get_user_categories,
     change_category,
@@ -478,3 +481,86 @@ class TestReplyContextQueries:
         sql, params = cur.execute.call_args.args
         assert "FROM expenses" in sql and "FROM incomes" in sql and "deleted_at IS NULL" in sql
         assert params == {"user_id": 7, "message_id": 41}
+
+
+def _live_row(**overrides):
+    return {
+        "id": 12, "amount": 25000, "currency": "COP", "category_id": 3, "category": "comida",
+        "date": "2026-10-20", "description": "almuerzo", "payment_method": None,
+        "merchant": None, "created_at": None, **overrides,
+    }
+
+
+class TestRecordCorrections:
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_recent_records_are_scoped_live_and_newest_first(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        cur.fetchall.return_value = []
+
+        get_recent_records(7, "expense", "2026-08-23")
+
+        sql, params = cur.execute.call_args.args
+        assert "FROM expenses" in sql and "user_id = %(user_id)s" in sql
+        assert "deleted_at IS NULL" in sql and "ORDER BY r.created_at DESC" in sql
+        assert params["since"] == "2026-08-23" and params["user_id"] == 7
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_update_logs_before_and_after_and_never_touches_created_at(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        cur.fetchone.side_effect = [_live_row(), {"id": 900}]
+
+        result = update_record(7, "expense", 12, {"amount": 15000, "date": "2026-10-21"}, 88, "expense_agent")
+
+        assert result["before"]["amount"] == 25000.0 and result["after"]["amount"] == 15000.0
+        assert result["after"]["date"] == "2026-10-21"
+        update_sql, update_params = cur.execute.call_args_list[1].args
+        assert update_sql.startswith("UPDATE expenses SET")
+        assert "expense_date = %(expense_date)s" in update_sql
+        assert "created_at" not in update_sql
+        assert "user_id = %(user_id)s" in update_sql and update_params["user_id"] == 7
+        event = cur.execute.call_args_list[2].args[1]
+        assert event["action"] == "update" and event["message_id"] == 88
+        assert event["before"].adapted["amount"] == 25000.0
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_update_category_must_be_an_active_category(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        cur.fetchone.side_effect = [_live_row(), None]
+        with pytest.raises(ValueError):
+            update_record(7, "expense", 12, {"category": "yates"}, 88, "expense_agent")
+        mock_get_conn.return_value.commit.assert_not_called()
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_update_rejects_fields_the_kind_does_not_have(self, mock_get_conn):
+        _mock_connection(mock_get_conn)
+        with pytest.raises(ValueError):
+            update_record(7, "income", 5, {"merchant": "x"}, 88, "income_agent")
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_update_of_another_users_or_deleted_record(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        cur.fetchone.side_effect = [None]
+        with pytest.raises(LookupError):
+            update_record(7, "expense", 12, {"amount": 1}, 88, "expense_agent")
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_delete_is_soft_and_logged(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        cur.fetchone.side_effect = [_live_row(), {"id": 901}]
+
+        before = delete_record(7, "expense", 12, 88, "expense_agent")
+
+        assert before["amount"] == 25000.0
+        sqls = [c.args[0] for c in cur.execute.call_args_list]
+        assert any("SET deleted_at = NOW()" in q for q in sqls)
+        assert not any(q.lstrip().startswith("DELETE") for q in sqls)
+        event = cur.execute.call_args_list[-1].args[1]
+        assert event["action"] == "delete" and event["after"] is None
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_message_records_include_records_a_correction_changed(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        cur.fetchall.return_value = []
+        get_message_records(7, 41)
+        sql = cur.execute.call_args.args[0]
+        assert "FROM record_events" in sql

@@ -278,7 +278,7 @@
     "profile": {"type": "personal"},
     "expected": {"route": "decline", "agents": []},
     "tags": ["adversarial", "phase-8-revisit"],
-    "notes": "No delete capability exists yet; revisit when Phase 8 adds corrections (bulk delete should still not be allowed)"
+    "notes": "Bulk deletes are declined (Phase 8 decision); deleting ONE record goes to its agent"
   },
   {
     "id": "adv-role-change",
@@ -358,8 +358,7 @@
     ],
     "expected": {"route": "agents", "agents": ["expenses"]},
     "tags": ["follow-up"],
-    "skip": "phase-8",
-    "notes": "Correction of the last record — needs Phase 8 edit support; skipped until then"
+    "notes": "Correction of the last record (Phase 8b): the expense agent finds and updates it"
   },
   {
     "id": "biz-rest-almuerzo-ambiguous",
@@ -685,7 +684,58 @@
       "reply",
       "follow-up"
     ],
-    "skip": "phase-8",
-    "notes": "Correction of the exact quoted record — needs Phase 8 edit support"
+    "notes": "Correction of the exact quoted record (Phase 8b): the task carries its id"
+  },
+  {
+    "id": "corr-delete-last",
+    "input": "borra el último gasto",
+    "profile": {
+      "type": "personal"
+    },
+    "expected": {
+      "route": "agents",
+      "agents": [
+        "expenses"
+      ]
+    },
+    "tags": [
+      "correction",
+      "single"
+    ],
+    "notes": "One specific record: the expense agent asks for confirmation before deleting"
+  },
+  {
+    "id": "corr-income-amount",
+    "input": "el salario de este mes fue de 2.500.000, no de 2 millones",
+    "profile": {
+      "type": "personal"
+    },
+    "expected": {
+      "route": "agents",
+      "agents": [
+        "incomes"
+      ]
+    },
+    "tags": [
+      "correction",
+      "single"
+    ]
+  },
+  {
+    "id": "corr-by-description",
+    "input": "el uber de ayer fue 12000, no 14000",
+    "profile": {
+      "type": "personal"
+    },
+    "expected": {
+      "route": "agents",
+      "agents": [
+        "expenses"
+      ]
+    },
+    "tags": [
+      "correction",
+      "single"
+    ]
   }
 ]

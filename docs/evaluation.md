@@ -90,6 +90,21 @@ Covers the full range of real-world inputs you would actually send:
 | USD | `"suscripción ChatGPT 20 dólares"` |
 | Multi-expense | `"almuerzo 20 luca y cine 40 mil"` |
 
+#### `corrections.json` — 17 cases (Phase 8b)
+
+Runs the real expense and income agents (`handle()`) against Claude with the database
+stubbed: five fixed expenses and two incomes (`_CORRECTION_RECORDS` in `evals/run.py`), today
+fixed to Thursday 2026-10-22. Scores the first thing the agent did or proposed — `record`,
+`update`, `delete` or `ask` — its target record and changed fields (`args`, containment
+match), and whether it asked for confirmation, with `score_users`. Cases cover swipe-replies
+(amount, category, date, currency, delete), "el último", descriptions, two matches (ask),
+nothing found (ask), a plain new expense, a kind change and a bulk delete (both ask, not
+supported), two quoted records (ask), and incomes.
+
+```bash
+uv run python -m evals.run --only corrections --check
+```
+
 #### `record_dates.json` — 16 cases
 
 The date each expense or income **happened** ("ayer gasté 10 mil" → yesterday), not when it

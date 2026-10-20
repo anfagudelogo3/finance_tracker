@@ -45,8 +45,15 @@ def _make_event(body: str = "almuerzo 32000", message_id: str = "SM123") -> dict
 
 
 def _tool_use_response(key: str, items: list[dict]) -> MagicMock:
-    block = MagicMock(type="tool_use", input={key: items})
-    return MagicMock(content=[block])
+    """Claude calling record_<key>."""
+    block = MagicMock(type="tool_use", id="tu_1", input={key: items})
+    block.name = f"record_{key}"
+    return MagicMock(stop_reason="tool_use", content=[block])
+
+
+def _end_turn() -> MagicMock:
+    """Claude ending its turn after the tool results: the loop stops only here."""
+    return MagicMock(stop_reason="end_turn", content=[])
 
 
 class TestExpenseTextPath:
@@ -78,7 +85,7 @@ class TestExpenseTextPath:
         mock_get_categories.return_value = ["comida", "otro"]
         mock_send_message.return_value = "SIDxxx"
         mock_save_expense.return_value = 101
-        mock_claude_client.messages.create.return_value = _tool_use_response(
+        mock_claude_client.messages.create.side_effect = [_tool_use_response(
             "expenses",
             [
                 {
@@ -90,7 +97,7 @@ class TestExpenseTextPath:
                     "description": "almuerzo",
                 }
             ],
-        )
+        ), _end_turn()]
 
         result = _handle_message(_make_event("almuerzo 32000"))
 
@@ -129,7 +136,7 @@ class TestIncomeTextPath:
         mock_get_categories.return_value = ["salario", "otro"]
         mock_send_message.return_value = "SIDxxx"
         mock_save_income.return_value = 201
-        mock_claude_client.messages.create.return_value = _tool_use_response(
+        mock_claude_client.messages.create.side_effect = [_tool_use_response(
             "incomes",
             [
                 {
@@ -139,7 +146,7 @@ class TestIncomeTextPath:
                     "description": "pago de salario",
                 }
             ],
-        )
+        ), _end_turn()]
 
         result = _handle_message(_make_event("me pagaron 2000000 de salario"))
 
@@ -516,11 +523,12 @@ class TestPendingConfirmationWiring:
             replies=[], prefs=prefs, handled=False
         )
         with patch(
-            "finance_tracker.handler.users.resolve_pending", return_value=("✅ hecho", {})
+            "finance_tracker.handler.pending.resolve", return_value=("✅ hecho", {})
         ) as resolve:
             _handle_message(_make_event("sí"))
 
         assert resolve.call_args.args[:3] == (7, prefs, "sí")
+        assert resolve.call_args.args[4] == 55  # the confirming message causes the change
         assert [c.args[1] for c in pipeline["send_message"].call_args_list] == ["✅ hecho"]
         pipeline["orchestrator"].handle_message.assert_not_called()
 
@@ -531,7 +539,7 @@ class TestPendingConfirmationWiring:
             replies=[], prefs={"onboarding": {"status": "done"}}, handled=False
         )
         with patch(
-            "finance_tracker.handler.users.resolve_pending",
+            "finance_tracker.handler.pending.resolve",
             return_value=(None, {"default_currency": "EUR"}),
         ):
             _handle_message(_make_event("uber 15000"))

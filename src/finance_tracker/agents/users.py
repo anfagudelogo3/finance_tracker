@@ -7,14 +7,13 @@ expense/income categories (add, rename, merge, deactivate, reactivate) and help 
 A tool-use loop (core/agent_loop.py) on the router's model. user_id is always injected
 here, never chosen by the model. Destructive changes don't run inside the loop: the tool
 stores a `pending_action` in user_prefs and the confirmation question is written in code.
-`resolve_pending` runs on the user's next message, before any routing: "sí" applies it
-with no LLM call, anything else cancels it (and that message is routed normally).
+`agents/pending.resolve` settles it on the user's next message, before any routing, and
+calls `apply_confirmed` here on a "sí".
 """
 
 import json
 import logging
 import re
-from datetime import datetime, timedelta
 
 from finance_tracker.config import (
     CLAUDE_USERS_MODEL,
@@ -32,17 +31,16 @@ from finance_tracker.config import (
     MSG_ERROR,
     MSG_PARTIAL_TIMEOUT,
     MSG_ROUTER_EMPTY,
-    PENDING_ACTION_MINUTES,
     ROUTER_MAX_INPUT_CHARS,
     USERS_EFFORT,
     USERS_MAX_ITERATIONS,
     USERS_MAX_TOKENS,
     USERS_TIMEOUT_SECONDS,
 )
+from finance_tracker.agents import pending
 from finance_tracker.core import agent_loop
 from finance_tracker.core.agent_types import AgentRequest, AgentResponse
 from finance_tracker.core.claude_client import client
-from finance_tracker.core.text import is_no, is_yes
 from finance_tracker.storage.database import (
     append_user_prefs,
     change_category,
@@ -171,8 +169,7 @@ def handle(request: AgentRequest) -> AgentResponse:
             raise RuntimeError(
                 "only one change needing confirmation per message; ask the user to request it again afterwards"
             )
-        pending = {**action, "question": question, "asked_at": request.now}
-        append_user_prefs(user_id, {"pending_action": pending}, source="users_agent")
+        pending.ask(user_id, action, question, request.now, source="users_agent")
         confirmation.append(question)
         asked.append(action)
         return "Needs confirmation: the question will be sent to the user. Not applied yet."
@@ -350,66 +347,25 @@ def _apply(user_id: int, action: dict) -> dict:
     return {**result, "old": action["name"]}
 
 
-def _expired(action: dict, now: str) -> bool:
-    try:
-        asked = datetime.fromisoformat(action.get("asked_at") or "")
-        return datetime.fromisoformat(now) - asked > timedelta(
-            minutes=PENDING_ACTION_MINUTES
-        )
-    except ValueError:
-        return True
-
-
-def resolve_pending(
-    user_id: int, prefs: dict, text: str, now: str
-) -> tuple[str | None, dict]:
-    """Settle a change waiting for confirmation, on the message right after the question.
-
-    Returns (reply, prefs). reply is None when the message wasn't a "sí" (or the
-    question is older than PENDING_ACTION_MINUTES): the pending change is cancelled and
-    the message must be routed normally. Called by handler.py for every message while
-    prefs["pending_action"] is set.
-    """
-    action = prefs.get("pending_action")
-    if not action:
-        return None, prefs
-
-    if not is_yes(text) or _expired(action, now):
-        append_user_prefs(user_id, {"pending_action": None}, source="users_agent")
-        prefs = {**prefs, "pending_action": None}
-        logger.info("Pending %s cancelled for user=%d", action["tool"], user_id)
-        if is_no(text) and not _expired(action, now):
-            return MSG_ACTION_CANCELLED, prefs
-        return None, prefs
-
+def apply_confirmed(user_id: int, action: dict) -> tuple[str, dict]:
+    """Apply a settings change the user confirmed (called by agents/pending.py).
+    Returns (reply, preference changes to store with the cleared pending action)."""
     if action["tool"] == "set_default_currency":
-        append_user_prefs(
-            user_id,
-            {"default_currency": action["code"], "pending_action": None},
-            source="users_agent",
-        )
-        prefs = {**prefs, "default_currency": action["code"], "pending_action": None}
-        return MSG_CURRENCY_CHANGED.format(code=action["code"]), prefs
+        return MSG_CURRENCY_CHANGED.format(code=action["code"]), {
+            "default_currency": action["code"]
+        }
 
     result = _apply(user_id, action)
-    append_user_prefs(user_id, {"pending_action": None}, source="users_agent")
-    prefs = {**prefs, "pending_action": None}
-    logger.info(
-        "Pending %s applied for user=%d → %s", action["tool"], user_id, result["status"]
-    )
     status = result["status"]
     if status == "renamed":
-        return (
-            MSG_CATEGORY_RENAMED.format(old=result["old"], name=result["name"]),
-            prefs,
-        )
+        return MSG_CATEGORY_RENAMED.format(old=result["old"], name=result["name"]), {}
     if status == "merged":
         return (
             MSG_CATEGORY_MERGED.format(
                 old=result["old"], name=result["name"], records=result.get("records", 0)
             ),
-            prefs,
+            {},
         )
     if status == "deactivated":
-        return MSG_CATEGORY_DEACTIVATED.format(name=result["name"]), prefs
-    return MSG_ACTION_CANCELLED, prefs
+        return MSG_CATEGORY_DEACTIVATED.format(name=result["name"]), {}
+    return MSG_ACTION_CANCELLED, {}

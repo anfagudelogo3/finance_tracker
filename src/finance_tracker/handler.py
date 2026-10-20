@@ -28,7 +28,7 @@ from finance_tracker.legacy.openai_parser import (
 from finance_tracker.routing.fast_paths import is_excel_request, fast_route
 from finance_tracker.core.agent_types import AgentRequest
 from finance_tracker.routing import orchestrator
-from finance_tracker.agents import onboarding, users
+from finance_tracker.agents import onboarding, pending
 from finance_tracker.channels.whatsapp import reply_context
 from finance_tracker.storage.excel import create_excel_bytes, upload_and_sign
 from finance_tracker.storage.database import (
@@ -295,8 +295,8 @@ def _handle_message(event):
                 held["message_id"], held["now"], [], outcome.prefs,
             )
 
-        # A settings change waiting for "sí" is settled before any routing (Phase 6c)
-        reply, prefs = users.resolve_pending(user_id, outcome.prefs, text, now)
+        # A settings or record change waiting for "sí" is settled before any routing
+        reply, prefs = pending.resolve(user_id, outcome.prefs, text, now, message_id)
         if reply:
             _send(user_id, message["phone"], reply, message_id)
             return {"statusCode": 200, "body": ""}

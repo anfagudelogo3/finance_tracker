@@ -1,12 +1,19 @@
+import json
 import logging
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from finance_tracker.core.agent_types import AgentRequest, AgentResponse
 from finance_tracker.core.dates import DATE_RULE, resolve_record_date, today_line
+from finance_tracker.agents import records
+from finance_tracker.channels.whatsapp.reply_context import as_prompt_block
+from finance_tracker.core import agent_loop
 from finance_tracker.core.claude_client import client
 from finance_tracker.config import (
     CLAUDE_EXTRACTION_MODEL,
+    MSG_ERROR,
+    RECORD_AGENT_MAX_ITERATIONS,
+    RECORD_AGENT_TIMEOUT_SECONDS,
     DEFAULT_CURRENCY,
     DEFAULT_INCOME_CATEGORIES,
     MSG_EMPTY_INCOME,
@@ -108,45 +115,100 @@ def _build_income_tool(categories: list[str]) -> dict:
     }
 
 
+def _run(
+    text: str,
+    categories: list[str],
+    currency: str,
+    today: date | None,
+    execute_tool,
+    replied_to: dict | None = None,
+):
+    """One agent turn on the tool loop; it ends when Claude ends its turn. A new record
+    is record_incomes plus a closing call; corrections (find → update/delete) take one
+    more. Replies are written in code from what the tools did."""
+    cats = categories or DEFAULT_INCOME_CATEGORIES
+    content = text
+    if replied_to:
+        content = f"{as_prompt_block(replied_to)}\n<message>{text}</message>"
+    logger.info("Calling Claude (income agent): %s", text)
+    return agent_loop.run_tool_loop(
+        client=client,
+        model=CLAUDE_EXTRACTION_MODEL,
+        system=_build_system_prompt(cats, currency, today) + records.rules("income"),
+        tools=[_build_income_tool(cats), *records.tools("income")],
+        messages=[{"role": "user", "content": content}],
+        execute_tool=execute_tool,
+        max_iterations=RECORD_AGENT_MAX_ITERATIONS,
+        timeout_seconds=RECORD_AGENT_TIMEOUT_SECONDS,
+        max_tokens=1024,
+    )
+
+
 def _extract(
     text: str,
     categories: list[str],
     currency: str = DEFAULT_CURRENCY,
     today: date | None = None,
 ) -> list[dict]:
-    """Forced tool-use call, same pattern as agents.expenses._extract."""
-    cats = categories or DEFAULT_INCOME_CATEGORIES
-    logger.info("Calling Claude to parse income: %s", text)
-    response = client.messages.create(
-        model=CLAUDE_EXTRACTION_MODEL,
-        max_tokens=1024,
-        system=_build_system_prompt(cats, currency, today),
-        messages=[{"role": "user", "content": text}],
-        tools=[_build_income_tool(cats)],
-        tool_choice={"type": "tool", "name": "record_incomes"},
-    )
-    tool_use = next(block for block in response.content if block.type == "tool_use")
-    logger.debug("Claude tool_use input: %s", tool_use.input)
-    return tool_use.input["incomes"]
+    """What record_incomes would record for `text`, with nothing written — the evals'
+    entry point, running the same prompt and tools as handle()."""
+    captured: list[dict] = []
+
+    def execute(name: str, tool_input: dict) -> str:
+        if name == "record_incomes":
+            captured.extend(tool_input.get("incomes") or [])
+            return "Recorded."
+        if name == "find_records":
+            return "[]"
+        if name == "ask_user":
+            return "The question will be sent to the user."
+        raise ValueError("corrections aren't available here")
+
+    _run(text, categories, currency, today, execute)
+    return captured
 
 
 def handle(request: AgentRequest) -> AgentResponse:
-    """Identify, extract, classify, and persist income(s) from a text or
-    audio-transcript message. Image/receipt income (e.g. deposit slips) isn't
-    classified yet — all image messages still route to the expense image path."""
+    """Record new incomes from a text or audio-transcript message, or correct existing
+    ones (Phase 8b: find, update, delete — agents/records.py)."""
     categories = get_user_categories(request.user_id, kind="income")
     # The message's own Bogota date: "ayer" is relative to when it was written (a
     # message held during onboarding keeps its date). created_at is the ingest time.
     message_date = datetime.fromisoformat(request.now).astimezone(_BOGOTA).date()
-    incomes = _extract(
-        request.text, categories, request.default_currency, message_date
-    )
-    if not incomes:
-        logger.info("No incomes parsed from message id=%d", request.message_id)
-        return AgentResponse(ok=True, reply_text=MSG_EMPTY_INCOME, data=None)
+    corrections = records.Corrections("income", request)
+    saved: list[dict] = []
+    future: list[dict] = []
 
+    def execute(name: str, tool_input: dict) -> str:
+        if name == "record_incomes":
+            corrections.check_new_record()
+            new_saved, new_future = _save(
+                tool_input.get("incomes") or [], request, message_date
+            )
+            saved.extend(new_saved)
+            future.extend(new_future)
+            return json.dumps({"recorded": len(new_saved), "future_not_recorded": len(new_future)})
+        return corrections.execute(name, tool_input)
+
+    outcome = _run(
+        request.text, categories, request.default_currency, message_date, execute,
+        request.replied_to,
+    )
+    parts = [_reply(saved, future)] if saved or future else []
+    parts += corrections.replies
+    if parts:
+        return AgentResponse(ok=True, reply_text="\n\n".join(parts), data=saved or None)
+    if outcome.status == agent_loop.END_TURN:
+        logger.info("Nothing to record or correct in message id=%d", request.message_id)
+        return AgentResponse(ok=True, reply_text=MSG_EMPTY_INCOME, data=None)
+    return AgentResponse(ok=False, reply_text=MSG_ERROR, error=outcome.status)
+
+
+def _save(items: list[dict], request: AgentRequest, message_date: date):
+    """Persist the new incomes (dated from the message's words); future-dated ones
+    aren't recorded. Returns (saved, future)."""
     saved, future = [], []
-    for income in incomes:
+    for income in items:
         record_date, is_future = resolve_record_date(
             income.get("date"), message_date, income.get("date_text")
         )
@@ -167,8 +229,7 @@ def handle(request: AgentRequest) -> AgentResponse:
             income.get("confidence"),
         )
         saved.append(income)
-
-    return AgentResponse(ok=True, reply_text=_reply(saved, future), data=saved or None)
+    return saved, future
 
 
 def _reply(saved: list[dict], future: list[dict]) -> str:

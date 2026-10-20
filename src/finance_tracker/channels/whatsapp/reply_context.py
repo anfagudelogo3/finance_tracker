@@ -97,3 +97,17 @@ def _iso(value) -> str | None:
             value = value.astimezone(_TZ)
         return value.isoformat()
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def as_prompt_block(replied_to: dict) -> str:
+    """The quoted message as tagged data, with the records it created (kind, id,
+    amount…) so a reply points at exact records."""
+    lines = [f'<replied_to role="{replied_to["role"]}" date="{replied_to.get("date") or ""}">']
+    lines.append(replied_to.get("text") or "(sin texto)")
+    for r in replied_to.get("records") or []:
+        lines.append(
+            f'record: {r["kind"]} #{r["id"]} {r["currency"]} {r["amount"]:,.0f} '
+            f'{r["category"]} {r["date"]} {r.get("description") or ""}'.rstrip()
+        )
+    lines.append("</replied_to>")
+    return "\n".join(lines)

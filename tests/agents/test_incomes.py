@@ -18,8 +18,28 @@ _DEFAULT_CATEGORIES = [
 
 
 def _tool_use_response(incomes: list[dict]) -> MagicMock:
-    block = MagicMock(type="tool_use", input={"incomes": incomes})
-    return MagicMock(content=[block])
+    """Claude calling record_incomes."""
+    block = MagicMock(type="tool_use", id="tu_1", input={"incomes": incomes})
+    block.name = "record_incomes"
+    return MagicMock(stop_reason="tool_use", content=[block])
+
+
+def _end_turn() -> MagicMock:
+    """Claude ending its turn after the tool results: the loop stops only here."""
+    return MagicMock(stop_reason="end_turn", content=[])
+
+
+class _records_from_claude:
+    """Context manager: make the mocked Claude client call record_incomes with `records`."""
+
+    def __init__(self, client, records):
+        client.messages.create.side_effect = [_tool_use_response(records), _end_turn()]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
 
 
 def _request(text: str) -> AgentRequest:
@@ -44,7 +64,7 @@ class TestHandle:
     ):
         mock_get_categories.return_value = _DEFAULT_CATEGORIES
         mock_save_income.return_value = 101
-        mock_client.messages.create.return_value = _tool_use_response(
+        mock_client.messages.create.side_effect = [_tool_use_response(
             [
                 {
                     "amount": 2000000,
@@ -53,7 +73,7 @@ class TestHandle:
                     "description": "pago de salario",
                 }
             ]
-        )
+        ), _end_turn()]
 
         response = handle(_request("me pagaron 2000000 de salario"))
 
@@ -75,7 +95,7 @@ class TestHandle:
     ):
         mock_get_categories.return_value = _DEFAULT_CATEGORIES
         mock_save_income.return_value = 102
-        mock_client.messages.create.return_value = _tool_use_response(
+        mock_client.messages.create.side_effect = [_tool_use_response(
             [
                 {
                     "amount": 500,
@@ -84,7 +104,7 @@ class TestHandle:
                     "description": "pago de cliente",
                 }
             ]
-        )
+        ), _end_turn()]
 
         response = handle(_request("me pagaron 500 dolares de un cliente"))
 
@@ -100,7 +120,7 @@ class TestHandle:
     ):
         mock_get_categories.return_value = _DEFAULT_CATEGORIES
         mock_save_income.side_effect = [201, 202]
-        mock_client.messages.create.return_value = _tool_use_response(
+        mock_client.messages.create.side_effect = [_tool_use_response(
             [
                 {
                     "amount": 3000000,
@@ -115,7 +135,7 @@ class TestHandle:
                     "description": "regalo",
                 },
             ]
-        )
+        ), _end_turn()]
 
         response = handle(
             _request(
@@ -135,7 +155,7 @@ class TestHandle:
         self, mock_client, mock_get_categories, mock_save_income
     ):
         mock_get_categories.return_value = _DEFAULT_CATEGORIES
-        mock_client.messages.create.return_value = _tool_use_response([])
+        mock_client.messages.create.side_effect = [_tool_use_response([]), _end_turn()]
 
         response = handle(_request("gracias"))
 
@@ -152,7 +172,7 @@ class TestHandle:
     ):
         mock_get_categories.return_value = ["consultoria", "salario"]
         mock_save_income.return_value = 301
-        mock_client.messages.create.return_value = _tool_use_response(
+        mock_client.messages.create.side_effect = [_tool_use_response(
             [
                 {
                     "amount": 800000,
@@ -161,7 +181,7 @@ class TestHandle:
                     "description": "consultoria",
                 }
             ]
-        )
+        ), _end_turn()]
 
         handle(_request("me pagaron 800000 por consultoria"))
 
@@ -174,7 +194,7 @@ class TestHandle:
             "properties"
         ]["category"]
         assert "consultoria" in category_schema["enum"]
-        assert call.kwargs["tool_choice"] == {"type": "tool", "name": "record_incomes"}
+        assert call.kwargs["tool_choice"] == {"type": "auto"}  # Claude decides when it's done
 
 
 class TestBuildSystemPrompt:
@@ -193,7 +213,7 @@ class TestMessageDateAndCurrency:
         request = replace(_request("salario 20000"), now="2026-10-19T23:30:00-05:00")
         with patch.object(agent, "get_user_categories", return_value=["otro"]), patch.object(
             agent, "save_income", return_value=1
-        ), patch.object(agent, "_extract", return_value=[{"amount": 20000, "currency": "COP",
+        ), patch.object(agent, "client") as fake_client, _records_from_claude(fake_client, [{"amount": 20000, "currency": "COP",
                 "category": "otro", "description": "x", "payment_method": None, "merchant": None}]):
             response = agent.handle(request)
 
@@ -217,19 +237,20 @@ class TestRecordDates:
         request = replace(_request("x"), now=now)
         with patch.object(agent, "get_user_categories", return_value=["otro"]), patch.object(
             agent, "save_income", return_value=1
-        ) as save, patch.object(agent, "_extract", return_value=records) as extract:
+        ) as save, patch.object(agent, "client") as fake_client, _records_from_claude(fake_client, records):
             response = agent.handle(request)
-        return response, save, extract
+        return response, save, fake_client
 
     def _record(self, **overrides):
         return {"amount": 10000, "currency": "COP", "category": "otro", "description": "almuerzo",
                  "payment_method": None, "merchant": None, "date": None, **overrides}
 
     def test_mentioned_date_is_used(self):
-        response, _, extract = self._handle([self._record(date="2026-10-21")])
+        response, _, fake_client = self._handle([self._record(date="2026-10-21")])
         assert response.data[0]["date"] == "2026-10-21"
         # the model is told the message's date, so "ayer" is relative to it
-        assert extract.call_args.args[3].isoformat() == "2026-10-22"
+        system = fake_client.messages.create.call_args.kwargs["system"]
+        assert "Today is jueves 2026-10-22" in system
 
     def test_future_date_is_not_recorded(self):
         response, save, _ = self._handle([self._record(amount=1000000, date="2026-10-23")])

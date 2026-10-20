@@ -1,6 +1,7 @@
 # Phase 8 — Conversational corrections: scope and decisions
 
-Status: **8a built** (edit log + reports with incomes); 8b and 8c not started. Every
+Status: **8a and 8b built** (edit log + reports with incomes; edit and delete); 8c not
+started. Every
 scoping question is decided (§2, §4). This document records the decisions taken while scoping
 Phase 8 and the design that follows from them. The roadmap ([agent-roadmap.md](../agent-roadmap.md)
 §7) summarizes it and links here.
@@ -121,10 +122,10 @@ The expense and income agents move from one forced tool call to `run_tool_loop`,
 | `delete_record` | Stores a pending delete and returns the confirmation question (code-written) |
 | `undo` | Finds the user's latest event(s) of this kind and stores a pending undo with the clarification question |
 
-**Latency guard:** a loop normally costs a second Claude call after the tool runs. For the
-common case, a new record with nothing else, the loop ends **in code** right after
-`record_*` succeeds ("terminal tool"), so plain expenses stay one call, as today. Only
-corrections pay for the extra turn.
+**The loop ends only when Claude ends its turn** (`stop_reason == "end_turn"`), never in
+code after a given tool: we only stop once the model says it's done. The cost is one more
+(short) Claude call per message: a plain new expense is `record_*` plus the closing call.
+`max_iterations` and the timeout stay safeguards only.
 
 `user_id` is injected by the executor and record ids are always checked against it, so a
 record id from the model can never reach another user's data.
@@ -181,12 +182,46 @@ tests for the expenses / incomes / net layout.
   that silently goes through the handler's catch-all error path (three tests had been
   passing that way because of incomplete mocks).
 
+## 4c. As built — 8b
+
+- **Agents on a tool loop that ends on `end_turn`.** The expense and income agents run
+  `core/agent_loop.run_tool_loop` with `tool_choice: auto`; the loop stops only when Claude
+  ends its turn (decided, not a code shortcut). A plain new record is two calls
+  (`record_*`, then the closing turn); a correction is three (`find_records` →
+  update/delete → closing turn). The prompt tells the agent to end its turn silently once
+  the tools are done; any final text is ignored, since replies are written in code.
+- **`agents/records.py`** holds the correction tools, the `Corrections` executor and the
+  Spanish replies, shared by both agents. Code decides confirmation: an update of a record
+  listed in `request.replied_to` is applied directly; an update of a record found by search
+  stores a pending "¿Es este? …"; a delete always asks. Changes equal to the current value
+  are dropped (the model sometimes repeats fields), a new category or currency is validated
+  before asking, and date words go through `core/dates` like new records (future → refused).
+- **Search before recording a possible correction.** If the message has "fue / era /
+  eran / costó / salió / valió" and the agent calls `record_*` before `find_records`, the
+  call fails with an instruction to search first (`Corrections.check_new_record`); after a
+  search that finds nothing, recording works. A duplicate record is worse than one more call.
+- **`agents/pending.py`** replaces `users.resolve_pending`: one mechanism stores and settles
+  every pending change (settings and records). On "sí" it calls the owner's
+  `apply_confirmed`; the confirming message is logged as the change's cause, so a
+  swipe-reply to the bot's "✏️ … actualizado" finds the record.
+- **Database:** `get_recent_records` (60-day window, newest registered first; text and amount
+  are filtered in Python, accent-insensitive), `get_record`, `update_record` and
+  `delete_record` (soft), all scoped by `user_id` and live rows, each logging to
+  `record_events` in the same transaction. `get_message_records` also returns records a
+  message *changed*, so reply context works for correction confirmations.
+- **Router:** corrections and deletes of ONE record go to that kind's agent, with the
+  quoted record's id in the task; bulk deletes and account deletion are still declined.
+- **Not yet (8c):** undo, and moving a record between expense and income (the agents answer
+  that it isn't possible yet).
+- **Evals:** `corrections.json` (17 cases) and 3 more routing cases; the two skipped
+  correction routing cases are enabled.
+
 ## 5. Delivery
 
 | PR | Content |
 |---|---|
 | **8a — Edit log + reports** | `record_events` (create events from day one), reports and Excel with incomes and net. No new chat capability yet. |
-| **8b — Edit and delete** | Agents on `run_tool_loop` with the terminal-tool guard; `find_records`, `update_record`, `delete_record` (with confirmation); reply-context link for correction confirmations; `corrections.json`. |
+| **8b — Edit and delete** | Agents on `run_tool_loop` (ends on `end_turn`); `find_records`, `update_record`, `delete_record` (with confirmation); reply-context link for correction confirmations; `corrections.json`. |
 | **8c — Undo and kind changes** | `undo` with clarification; `move` between expense and income; routing cases enabled. |
 
 Each PR: tests and the matching evals green, docs updated, and the live routing eval rerun
