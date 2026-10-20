@@ -6,6 +6,7 @@ import pytest
 from finance_tracker.agents import pending, users
 from finance_tracker.config import (
     MSG_ACTION_CANCELLED,
+    MSG_CATEGORY_ADDED,
     MSG_CATEGORY_DEACTIVATED,
     MSG_CATEGORY_MERGED,
     MSG_CATEGORY_RENAMED,
@@ -14,7 +15,9 @@ from finance_tracker.config import (
     MSG_CONFIRM_MERGE,
     MSG_CURRENCY_CHANGED,
     MSG_ERROR,
+    MSG_PARTIAL_TIMEOUT,
 )
+from finance_tracker.core import deadline
 from finance_tracker.core.agent_types import AgentRequest
 
 NOW = "2026-10-20T09:00:00-05:00"
@@ -286,6 +289,29 @@ class TestGuards:
         claude.messages.create.return_value = _response("max_tokens")
         response = users.handle(_request("x"))
         assert not response.ok and response.reply_text == MSG_ERROR
+
+    def test_out_of_time_after_a_change_still_reports_it(self, claude, db):
+        # The category is added, then the deadline runs out before the closing call
+        # (the 2026-10-20 "Agregar categoría suscripciones" incident)
+        now = [0.0]
+
+        def slow_call(**kwargs):
+            now[0] += 9.0
+            return _response(
+                "tool_use",
+                _tool_use("add_category", {"kind": "expense", "name": "suscripciones"}),
+            )
+
+        claude.messages.create.side_effect = slow_call
+        deadline.start(10, clock=lambda: now[0])
+
+        response = users.handle(_request("Agregar categoría suscripciones"))
+
+        assert claude.messages.create.call_count == 1
+        assert response.ok
+        assert response.reply_text == (
+            MSG_CATEGORY_ADDED.format(name="suscripciones") + "\n\n" + MSG_PARTIAL_TIMEOUT
+        )
 
 
 class TestResolvePending:

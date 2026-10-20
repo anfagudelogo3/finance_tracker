@@ -191,7 +191,8 @@ so a stale "sí" can't confirm something the user has forgotten.
   the router. "Create a category and record in it" delegates to users first, then expenses.
   Deleting records or the account is still declined by the router.
 - **Latency:** the users agent has its own 8 s budget (`USERS_TIMEOUT_SECONDS`) because it
-  runs inside the router's 12 s loop. Measured alone: p50 3.5 s, max 5.7 s. A settings message
+  runs inside the router's 12 s loop (both later replaced by one deadline per message,
+  [agent-roadmap.md](../agent-roadmap.md) §4.3). Measured alone: p50 3.5 s, max 5.7 s. A settings message
   is therefore the slowest path (router + users agent + router's closing call); watch it in
   Phoenix.
 - **Evals:** `evals/datasets/users_agent.json` (18 cases, 100%) and the routing dataset's

@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from finance_tracker.core import agent_loop
+from finance_tracker.core import agent_loop, deadline
 from finance_tracker.core.agent_loop import run_tool_loop
 
 
@@ -18,7 +18,7 @@ def _response(stop_reason: str, *blocks) -> MagicMock:
     return MagicMock(stop_reason=stop_reason, content=list(blocks))
 
 
-def _run(client, execute_tool=None, clock=None, max_iterations=6, timeout=12):
+def _run(client, execute_tool=None, max_iterations=6):
     return run_tool_loop(
         client=client,
         model="claude-haiku-5-5",
@@ -27,9 +27,7 @@ def _run(client, execute_tool=None, clock=None, max_iterations=6, timeout=12):
         messages=[{"role": "user", "content": "hola"}],
         execute_tool=execute_tool or (lambda name, tool_input: "ok"),
         max_iterations=max_iterations,
-        timeout_seconds=timeout,
         max_tokens=2048,
-        **({"clock": clock} if clock else {}),
     )
 
 
@@ -101,15 +99,40 @@ class TestSafeguards:
         assert client.messages.create.call_count == 3
         assert [c.name for c in outcome.tool_calls] == ["a", "a", "a"]
 
-    def test_timeout_checked_before_each_call(self):
-        client = MagicMock()
-        client.messages.create.return_value = _response("tool_use", _tool_use("a", {}))
-        times = iter([0.0, 0.0, 5.0, 20.0])  # start, iter 1, iter 2, iter 3 (> 12 s)
+    def test_deadline_checked_before_each_call(self):
+        now = [0.0]
 
-        outcome = _run(client, clock=lambda: next(times))
+        def slow_call(**kwargs):
+            now[0] += 4.5  # each call takes 4.5 s of a 10 s budget
+            return _response("tool_use", _tool_use("a", {}))
+
+        client = MagicMock()
+        client.messages.create.side_effect = slow_call
+        deadline.start(10, clock=lambda: now[0])
+
+        outcome = _run(client)  # 1 s left before the third call: under the minimum
 
         assert outcome.status == agent_loop.TIMEOUT
         assert client.messages.create.call_count == 2
+        assert [c.name for c in outcome.tool_calls] == ["a", "a"]
+
+    def test_each_call_gets_the_time_left_as_its_timeout(self):
+        client = MagicMock()
+        client.messages.create.return_value = _response("end_turn")
+        deadline.start(20, clock=lambda: 0.0)
+
+        _run(client)
+
+        # split between the attempt and the client's one retry
+        assert client.messages.create.call_args.kwargs["timeout"] == 10.0
+
+    def test_no_deadline_no_timeout_option(self):
+        client = MagicMock()
+        client.messages.create.return_value = _response("end_turn")
+
+        _run(client)
+
+        assert "timeout" not in client.messages.create.call_args.kwargs
 
     def test_tool_exception_becomes_is_error_result_and_loop_continues(self):
         client = MagicMock()

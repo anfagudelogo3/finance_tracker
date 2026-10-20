@@ -36,6 +36,13 @@ OPENAI_AUDIO_LANGUAGE = "es"
 # Claude models — expense agent (text/audio only; image expense stays on OpenAI vision)
 CLAUDE_EXTRACTION_MODEL = "claude-haiku-4-5-20251001"
 
+# Time budget (core/deadline.py): each message gets the Lambda's remaining time minus
+# a reserve to send the reply, shared by every Claude call it makes
+REPLY_RESERVE_SECONDS = 5         # Twilio send + saving the turn (or the error reply)
+CLAUDE_MIN_CALL_SECONDS = 2       # a loop doesn't start a call with less time left
+CLAUDE_MAX_RETRIES = 1            # per call; the deadline's timeout covers both attempts
+CLAUDE_TIMEOUT_SECONDS = 30       # client default, when no deadline is set (evals)
+
 # Router agent (Phase 5) — runs only when no keyword fast path matched. Haiku 5.5 at low
 # effort: cheapest current tier, thinks before choosing tools (tool_choice=auto).
 CLAUDE_ROUTER_MODEL = "claude-haiku-5-5"
@@ -43,7 +50,6 @@ ROUTER_EFFORT = "low"
 ROUTER_MAX_TOKENS = 2048          # thinking counts toward this on Haiku 5.5
 ROUTER_MAX_ITERATIONS = 6         # safeguard only — the loop normally ends on end_turn
 ROUTER_MAX_DELEGATIONS = 3        # specialist calls allowed per message
-AGENT_LOOP_TIMEOUT_SECONDS = 12   # stays under Twilio's 15 s webhook timeout
 ROUTER_MAX_INPUT_CHARS = 1000     # longer messages are truncated before routing
 
 # User profile (user_prefs → profile) used when a user has none set
@@ -200,7 +206,6 @@ CLAUDE_USERS_MODEL = "claude-haiku-5-5"
 USERS_EFFORT = "low"
 USERS_MAX_TOKENS = 2048
 USERS_MAX_ITERATIONS = 6          # safeguard only, like the router
-USERS_TIMEOUT_SECONDS = 8         # runs inside the router loop (12 s), which must fit Twilio's 15 s
 
 # A destructive change waits for a "sí" on the very next message (else it's cancelled)
 PENDING_ACTION_MINUTES = 30       # an older confirmation question no longer counts
@@ -229,6 +234,9 @@ MSG_CATEGORY_DEACTIVATED = (
     "✅ Desactivé la categoría *{name}*. Tus reportes anteriores la siguen mostrando."
 )
 MSG_CURRENCY_CHANGED = "✅ Tu moneda principal ahora es {code}."
+MSG_CATEGORY_ADDED = "✅ Agregué la categoría *{name}*."
+MSG_CATEGORY_REACTIVATED = "✅ Reactivé la categoría *{name}*."
+MSG_BUSINESS_UPDATED = "✅ Actualicé los datos de tu negocio."
 
 # Reply context (Phase 7a) — WhatsApp swipe-replies
 REPLIED_TO_MAX_CHARS = 400               # quoted text passed to the router (reports can be long)
@@ -246,7 +254,6 @@ MSG_FUTURE_INCOME = (
 
 # Record corrections (Phase 8b) — agents/records.py
 RECORD_AGENT_MAX_ITERATIONS = 4       # safeguard: find → update is two turns
-RECORD_AGENT_TIMEOUT_SECONDS = 8      # runs inside the router loop (12 s)
 CORRECTION_WINDOW_DAYS = 60           # "el Uber de ayer" searches this far back
 RECORD_FIELD_LABELS = {
     "amount": "monto",

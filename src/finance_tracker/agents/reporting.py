@@ -3,6 +3,7 @@ import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from finance_tracker.core import deadline
 from finance_tracker.core.agent_types import AgentRequest, AgentResponse
 from finance_tracker.core.claude_client import client
 from finance_tracker.config import CLAUDE_EXTRACTION_MODEL
@@ -190,6 +191,7 @@ Rules:
         messages=messages,
         tools=[_build_fallback_tool()],
         tool_choice={"type": "tool", "name": "record_date_range"},
+        **deadline.call_options(),
     )
     tool_use = next(block for block in response.content if block.type == "tool_use")
     logger.debug("Claude tool_use input: %s", tool_use.input)

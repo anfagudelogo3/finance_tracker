@@ -53,6 +53,17 @@ def _no_live_database(monkeypatch):
     monkeypatch.setattr(psycopg2, "connect", _blocked)
 
 
+@pytest.fixture(autouse=True)
+def _no_deadline():
+    """Each test starts without a message deadline (core/deadline.py); tests that need
+    one start it with a fake clock."""
+    from finance_tracker.core import deadline
+
+    deadline.clear()
+    yield
+    deadline.clear()
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",

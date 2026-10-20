@@ -1,8 +1,8 @@
 {
   "Runtime": "python3.12",
   "Handler": "handler.handler",
-  "Timeout": 20,
-  "MemorySize": 150,
+  "Timeout": 40,
+  "MemorySize": 512,
   "EphemeralStorage": {"Size": 512},
   "Environment": {
     "Variables": {

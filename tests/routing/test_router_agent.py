@@ -8,6 +8,7 @@ from finance_tracker.config import (
     MSG_PARTIAL_TIMEOUT,
     MSG_ROUTER_EMPTY,
 )
+from finance_tracker.core import deadline
 from finance_tracker.core.agent_types import AgentRequest, AgentResponse
 from finance_tracker.routing import router_agent
 
@@ -218,6 +219,29 @@ class TestSafeguardReplies:
         assert result.loop_status == "max_iterations"
         assert result.reply_text.startswith("✅ expenses: almuerzo 20k")
         assert result.reply_text.endswith(MSG_PARTIAL_TIMEOUT)
+
+    def test_out_of_time_note_is_not_repeated(self, claude):
+        # The specialist stopped early and added the note itself; the router, out of
+        # time too, doesn't add it again
+        now = [0.0]
+
+        def slow_call(**kwargs):
+            now[0] += 9.0
+            return _response(
+                "tool_use", _tool_use("delegate_to_users", {"task": "agregar categoría"})
+            )
+
+        claude.messages.create.side_effect = slow_call
+        deadline.start(10, clock=lambda: now[0])
+        handlers = _stub_handlers([])
+        handlers["users"] = lambda request: AgentResponse(
+            ok=True, reply_text=f"✅ Agregué la categoría.\n\n{MSG_PARTIAL_TIMEOUT}"
+        )
+
+        result = router_agent.route(_request(), handlers)
+
+        assert result.loop_status == "timeout"
+        assert result.reply_text == f"✅ Agregué la categoría.\n\n{MSG_PARTIAL_TIMEOUT}"
 
     def test_safeguard_with_nothing_done_sends_error(self, claude):
         claude.messages.create.return_value = _response("max_tokens")
