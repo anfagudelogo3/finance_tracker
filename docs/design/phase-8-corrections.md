@@ -1,6 +1,7 @@
 # Phase 8 — Conversational corrections: scope and decisions
 
-Status: **scoped, not started**; every scoping question is decided (§2, §4). This document records the decisions taken while scoping
+Status: **8a built** (edit log + reports with incomes); 8b and 8c not started. Every
+scoping question is decided (§2, §4). This document records the decisions taken while scoping
 Phase 8 and the design that follows from them. The roadmap ([agent-roadmap.md](../agent-roadmap.md)
 §7) summarizes it and links here.
 
@@ -163,6 +164,22 @@ tests for the expenses / incomes / net layout.
    ("el Uber del 3 de agosto").
 5. **Excel:** a second sheet "Ingresos" and a summary sheet with totals and the net, per
    currency.
+
+## 4b. As built — 8a
+
+- `record_events` in `scripts/setup_db.sql`; `save_expense` / `save_income` write a
+  `create` event (with the `after` snapshot and the causing `message_id`) in the same
+  transaction. `event_source` is `expense_agent`, `income_agent`, or `image_parser` for the
+  legacy photo path.
+- `database.get_incomes`; the reporting agent reads both and `report_format.format_report`
+  prints 💸 Gastos, 💰 Ingresos and 📈/📉 Neto per currency ("Sin movimientos registrados"
+  when both are empty). `AgentResponse.data` tags each row with its `kind`.
+- Excel: `movimientos_<from>_<to>.xlsx` with "Gastos", "Ingresos" and "Resumen" (totals and
+  net per currency); headers now in Spanish; the S3 key timestamp is Bogota time.
+- Tests: `tests/agents/test_report_format.py`, `tests/storage/test_excel.py`, record-event
+  assertions in `tests/storage/test_database.py`. `tests/test_handler.py` now fails any test
+  that silently goes through the handler's catch-all error path (three tests had been
+  passing that way because of incomplete mocks).
 
 ## 5. Delivery
 

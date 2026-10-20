@@ -16,6 +16,7 @@ users ──┬── messages ──── expenses (FK message_id, user_id, ca
         ├── user_prefs (append-only, latest row wins)
         ├── conversation_turns
         ├── categories ── category_events (append-only history)
+        ├── record_events (append-only history of expenses/incomes)
         └── budgets
 ```
 
@@ -215,6 +216,30 @@ Mirrors `expenses` for money coming in.
 | `deleted_at` | `TIMESTAMPTZ` | Soft delete |
 | `created_at` | `TIMESTAMPTZ` | |
 
+## `record_events` (append-only history of expenses and incomes, Phase 8)
+
+One row per change to an expense or income; never updated or deleted. It's the audit
+trail and what undo reverts to (Phase 8c). Since Phase 8a every new record writes a
+`create` row in the same transaction (`database.save_expense` / `save_income`); edits,
+deletes, undo and expense ↔ income moves come in 8b–8c. `created_at` on the records
+themselves is never edited. Design: [design/phase-8-corrections.md](design/phase-8-corrections.md).
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `SERIAL` PK | |
+| `user_id` | `INTEGER NOT NULL` | FK → `users(id)` `ON DELETE CASCADE` |
+| `record_kind` | `VARCHAR(10) NOT NULL` | `expense` or `income` |
+| `record_id` | `INTEGER NOT NULL` | The expense or income id |
+| `action` | `VARCHAR(20) NOT NULL` | `create`, `update`, `delete`, `undo`, `move` |
+| `before` / `after` | `JSONB` | Field values before / after (amount, currency, category_id, category, date, payment_method, merchant, description). `before` is NULL for `create`, `after` for `delete` |
+| `message_id` | `INTEGER` | FK → `messages(id)` `ON DELETE SET NULL`: the message that caused it |
+| `related_event` | `INTEGER` | FK → `record_events(id)`: the other half of a move, or the event an undo reverts |
+| `source` | `VARCHAR(20) NOT NULL` | `expense_agent`, `income_agent`, `image_parser`, `undo` |
+| `created_at` | `TIMESTAMPTZ` | When the change happened |
+
+Reports and Excel read incomes through `database.get_incomes` (the counterpart of
+`get_expenses`: live rows, current category name).
+
 ## `budgets` (table created in Phase 0; agent in Phase 3)
 
 Per-currency budgets, either global or scoped to a category.
@@ -240,6 +265,7 @@ Per-currency budgets, either global or scoped to a category.
 | `idx_turns_user_created` | `conversation_turns(user_id, created_at)` |
 | `idx_categories_user` | `categories(user_id, kind)` |
 | `idx_category_events_user` | `category_events(user_id, created_at)` |
+| `idx_record_events_record` / `idx_record_events_user` | `record_events(record_kind, record_id)` / `(user_id, created_at)` |
 | `idx_expenses_user` | `expenses(user_id)` |
 | `idx_expenses_message_id` | `expenses(message_id)` |
 | `idx_expenses_date` | `expenses(expense_date)` |

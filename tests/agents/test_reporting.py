@@ -18,6 +18,13 @@ import pytest
 from finance_tracker.core.agent_types import AgentRequest
 from finance_tracker.agents.reporting import _resolve_deterministic, handle, resolve_date_range
 
+
+@pytest.fixture(autouse=True)
+def mock_get_incomes():
+    """Reports read incomes too (Phase 8a); none unless a test sets them."""
+    with patch("finance_tracker.agents.reporting.get_incomes", return_value=[]) as mock:
+        yield mock
+
 _DATASET_PATH = (
     Path(__file__).parents[2] / "evals" / "datasets" / "parse_report_request.json"
 )
@@ -155,7 +162,9 @@ class TestHandle:
         assert "comida" in response.reply_text
         assert "transporte" in response.reply_text
         # data holds the query results used to build the report — not a persisted row.
-        assert response.data == mock_get_expenses.return_value
+        assert response.data == [
+            {**row, "kind": "expense"} for row in mock_get_expenses.return_value
+        ]
         assert response.reply_attachment is None
 
     @patch("finance_tracker.agents.reporting.get_expenses")
@@ -207,5 +216,23 @@ class TestHandle:
         response = handle(request)
 
         assert response.ok
-        assert "Sin gastos registrados" in response.reply_text
+        assert "Sin movimientos registrados" in response.reply_text
         assert response.data == []
+
+
+class TestHandleWithIncomes:
+    @patch("finance_tracker.agents.reporting.get_expenses")
+    def test_incomes_are_queried_and_tagged(self, mock_get_expenses, mock_get_incomes):
+        mock_get_expenses.return_value = [{"amount": 50000, "currency": "COP", "category": "comida"}]
+        mock_get_incomes.return_value = [{"amount": 200000, "currency": "COP", "category": "salario"}]
+        request = AgentRequest(
+            user_id=7, message_id=1, phone="+573001234567", text="este mes", media=[],
+            message_type="text", now="2026-06-25T10:00:00-05:00", conversation=[],
+        )
+
+        response = handle(request)
+
+        mock_get_incomes.assert_called_once_with(7, "2026-06-01", "2026-06-25")
+        assert [row["kind"] for row in response.data] == ["expense", "income"]
+        assert "💰 Ingresos" in response.reply_text
+        assert "📈 Neto: COP 150.000" in response.reply_text

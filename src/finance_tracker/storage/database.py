@@ -576,11 +576,72 @@ def save_message(user_id: int, whatsapp_message_id: str, phone_number: str, raw_
             return row["id"]
 
 
-def save_expense(message_id: int, expense: dict, user_id: int) -> int:
+# Fields copied into record_events snapshots (before / after), per kind
+_EVENT_FIELDS = {
+    "expense": ("amount", "currency", "category_id", "category", "date",
+                "payment_method", "merchant", "description"),
+    "income": ("amount", "currency", "category_id", "category", "date", "description"),
+}
+
+
+def _snapshot(kind: str, record: dict) -> dict:
+    """JSON-safe copy of a record's editable fields for record_events."""
+    snapshot = {}
+    for field in _EVENT_FIELDS[kind]:
+        value = record.get(field)
+        if field == "amount" and value is not None:
+            value = float(value)
+        elif field == "date" and value is not None:
+            value = str(value)
+        snapshot[field] = value
+    return snapshot
+
+
+def _log_record_event(
+    cur,
+    user_id: int,
+    kind: str,
+    record_id: int,
+    action: str,
+    *,
+    before: dict | None = None,
+    after: dict | None = None,
+    message_id: int | None = None,
+    source: str,
+    related_event: int | None = None,
+) -> int:
+    """Append one row to record_events (inside the caller's transaction)."""
+    cur.execute(
+        """
+        INSERT INTO record_events (user_id, record_kind, record_id, action, before, after,
+                                   message_id, related_event, source)
+        VALUES (%(user_id)s, %(kind)s, %(record_id)s, %(action)s, %(before)s, %(after)s,
+                %(message_id)s, %(related_event)s, %(source)s)
+        RETURNING id;
+        """,
+        {
+            "user_id": user_id,
+            "kind": kind,
+            "record_id": record_id,
+            "action": action,
+            "before": Json(before) if before is not None else None,
+            "after": Json(after) if after is not None else None,
+            "message_id": message_id,
+            "related_event": related_event,
+            "source": source,
+        },
+    )
+    return cur.fetchone()["id"]
+
+
+def save_expense(
+    message_id: int, expense: dict, user_id: int, event_source: str = "expense_agent"
+) -> int:
     """Insert a parsed expense linked to a message and user. Returns the new row ID.
 
     The category name is resolved to the user's category_id (unknown → 'otro'), and
-    expense["category"] is set to the stored name so the confirmation matches.
+    expense["category"] is set to the stored name so the confirmation matches. A
+    'create' row is written to record_events in the same transaction.
     """
     query = """
         INSERT INTO expenses (
@@ -603,17 +664,25 @@ def save_expense(message_id: int, expense: dict, user_id: int) -> int:
             expense["category"] = category["name"]
             cur.execute(query, expense)
             row_id = cur.fetchone()["id"]
+            _log_record_event(
+                cur, user_id, "expense", row_id, "create",
+                after=_snapshot("expense", expense), message_id=message_id,
+                source=event_source,
+            )
             conn.commit()
             logger.debug("Inserted expense id=%d message_id=%d", row_id, message_id)
             return row_id
 
 
-def save_income(message_id: int, income: dict, user_id: int) -> int:
+def save_income(
+    message_id: int, income: dict, user_id: int, event_source: str = "income_agent"
+) -> int:
     """Insert a parsed income record linked to a message and user. Returns the new row ID.
 
     Mirrors save_expense's pattern exactly, but `source` here means the money's origin
     ('manual' | 'gmail' | 'bank'), not the WhatsApp message channel — callers must not
-    pass a message_type value into it. The category is resolved to an id like there.
+    pass a message_type value into it. The category is resolved to an id and a
+    'create' event logged, like there.
     """
     query = """
         INSERT INTO incomes (
@@ -636,6 +705,11 @@ def save_income(message_id: int, income: dict, user_id: int) -> int:
             income["category"] = category["name"]
             cur.execute(query, income)
             row_id = cur.fetchone()["id"]
+            _log_record_event(
+                cur, user_id, "income", row_id, "create",
+                after=_snapshot("income", income), message_id=message_id,
+                source=event_source,
+            )
             conn.commit()
             logger.debug("Inserted income id=%d message_id=%d", row_id, message_id)
             return row_id
@@ -664,6 +738,34 @@ def get_expenses(user_id: int, min_date: str, max_date: str) -> list[dict]:
             rows = cur.fetchall()
             logger.debug(
                 "Fetched %d expenses for user=%d between %s and %s",
+                len(rows), user_id, min_date, max_date,
+            )
+            return [dict(row) for row in rows]
+
+
+def get_incomes(user_id: int, min_date: str, max_date: str) -> list[dict]:
+    """Return all non-deleted incomes for a user within the date range (inclusive),
+    with the category's current name. The incomes counterpart of get_expenses."""
+    query = """
+        SELECT i.amount, i.currency, c.name AS category, i.income_date,
+               i.description, i.source
+        FROM incomes i
+        JOIN categories c ON c.id = i.category_id
+        WHERE i.user_id = %(user_id)s
+          AND i.deleted_at IS NULL
+          AND i.income_date BETWEEN %(min_date)s AND %(max_date)s
+        ORDER BY i.income_date, c.name;
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, {
+                "user_id": user_id,
+                "min_date": min_date,
+                "max_date": max_date,
+            })
+            rows = cur.fetchall()
+            logger.debug(
+                "Fetched %d incomes for user=%d between %s and %s",
                 len(rows), user_id, min_date, max_date,
             )
             return [dict(row) for row in rows]

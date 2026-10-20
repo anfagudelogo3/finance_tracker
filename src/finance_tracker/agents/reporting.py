@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from finance_tracker.core.agent_types import AgentRequest, AgentResponse
 from finance_tracker.core.claude_client import client
 from finance_tracker.config import CLAUDE_EXTRACTION_MODEL
-from finance_tracker.storage.database import get_expenses
+from finance_tracker.storage.database import get_expenses, get_incomes
 from finance_tracker.core.text import normalize
 from finance_tracker.agents.report_format import format_report
 
@@ -211,20 +211,25 @@ def resolve_date_range(
 
 
 def handle(request: AgentRequest) -> AgentResponse:
-    """Read and aggregate existing expenses — no persistence. AgentResponse.data holds
-    the query results used to build the report, not a newly-created row (unlike
-    agents.expenses/agents.incomes's extract-then-persist shape)."""
+    """Read and aggregate existing expenses and incomes — no persistence.
+    AgentResponse.data holds the query results used to build the report (each row
+    tagged with its kind), not a newly-created row (unlike agents.expenses /
+    agents.incomes's extract-then-persist shape)."""
     now = datetime.fromisoformat(request.now)
     date_range = resolve_date_range(request.text, now, request.conversation)
-    expenses = get_expenses(
-        request.user_id, date_range["min_date"], date_range["max_date"]
-    )
+    min_date, max_date = date_range["min_date"], date_range["max_date"]
+    expenses = get_expenses(request.user_id, min_date, max_date)
+    incomes = get_incomes(request.user_id, min_date, max_date)
     logger.info(
-        "Report for user=%d: %d expense(s) between %s and %s",
+        "Report for user=%d: %d expense(s), %d income(s) between %s and %s",
         request.user_id,
         len(expenses),
-        date_range["min_date"],
-        date_range["max_date"],
+        len(incomes),
+        min_date,
+        max_date,
     )
-    report = format_report(expenses, date_range["min_date"], date_range["max_date"])
-    return AgentResponse(ok=True, reply_text=report, data=expenses)
+    report = format_report(expenses, incomes, min_date, max_date)
+    data = [{**e, "kind": "expense"} for e in expenses] + [
+        {**i, "kind": "income"} for i in incomes
+    ]
+    return AgentResponse(ok=True, reply_text=report, data=data)

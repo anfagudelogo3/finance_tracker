@@ -35,6 +35,7 @@ from finance_tracker.storage.database import (
     save_message,
     save_expense,
     get_expenses,
+    get_incomes,
     update_message_transcript,
     get_or_create_user,
     get_user_categories,
@@ -145,9 +146,13 @@ def _route(
             date_range["min_date"], date_range["max_date"],
         )
         expenses = get_expenses(user_id, date_range["min_date"], date_range["max_date"])
-        logger.info("Fetched %d expense(s) for Excel export", len(expenses))
-        excel_bytes = create_excel_bytes(expenses)
-        filename = f"gastos_{date_range['min_date']}_{date_range['max_date']}.xlsx"
+        incomes = get_incomes(user_id, date_range["min_date"], date_range["max_date"])
+        logger.info(
+            "Fetched %d expense(s) and %d income(s) for Excel export",
+            len(expenses), len(incomes),
+        )
+        excel_bytes = create_excel_bytes(expenses, incomes)
+        filename = f"movimientos_{date_range['min_date']}_{date_range['max_date']}.xlsx"
         presigned_url = upload_and_sign(
             excel_bytes, phone, date_range["min_date"], date_range["max_date"]
         )
@@ -186,7 +191,7 @@ def _route(
 
         for expense in expenses:
             expense["source"] = "image"
-            expense_id = save_expense(message_id, expense, user_id)
+            expense_id = save_expense(message_id, expense, user_id, event_source="image_parser")
             logger.info(
                 "Expense saved: id=%d amount=%s category=%s confidence=%s source=image",
                 expense_id, expense.get("amount"), expense.get("category"), expense.get("confidence"),

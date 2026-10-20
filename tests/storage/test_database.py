@@ -7,6 +7,7 @@ from finance_tracker.storage.database import (
     save_expense,
     save_income,
     get_expenses,
+    get_incomes,
     get_or_create_user,
     get_user_categories,
     change_category,
@@ -68,8 +69,10 @@ class TestSaveExpense:
     @patch("finance_tracker.storage.database.get_connection")
     def test_saves_and_returns_id(self, mock_get_conn):
         mock_cursor = _mock_connection(mock_get_conn, 1)
-        # Category lookup → the user's 'comida' row, then INSERT RETURNING id
-        mock_cursor.fetchone.side_effect = [{"id": 3, "name": "comida"}, {"id": 1}]
+        # Category lookup → the user's 'comida' row, INSERT RETURNING id, event RETURNING id
+        mock_cursor.fetchone.side_effect = [
+            {"id": 3, "name": "comida"}, {"id": 1}, {"id": 900}
+        ]
 
         expense = {
             "amount": 32000,
@@ -86,13 +89,37 @@ class TestSaveExpense:
         assert result == 1
         assert expense["user_id"] == 7  # user_id injected into the row
         assert expense["category_id"] == 3  # stored by id, not by name
-        insert_sql, params = mock_cursor.execute.call_args_list[-1].args
-        assert "category_id" in insert_sql and params["category_id"] == 3
+        insert_sql, params = mock_cursor.execute.call_args_list[-2].args
+        assert "INSERT INTO expenses" in insert_sql and params["category_id"] == 3
+
+        # Same transaction: a 'create' event with the record's values
+        event_sql, event = mock_cursor.execute.call_args_list[-1].args
+        assert "INSERT INTO record_events" in event_sql
+        assert (event["kind"], event["record_id"], event["action"]) == ("expense", 1, "create")
+        assert event["before"] is None and event["message_id"] == 1
+        assert event["source"] == "expense_agent"
+        assert event["after"].adapted == {
+            "amount": 32000.0, "currency": "COP", "category_id": 3, "category": "comida",
+            "date": "2026-04-03", "payment_method": None, "merchant": None,
+            "description": "almuerzo",
+        }
+        mock_get_conn.return_value.commit.assert_called_once()
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_event_source_is_passed_through(self, mock_get_conn):
+        mock_cursor = _mock_connection(mock_get_conn)
+        mock_cursor.fetchone.side_effect = [{"id": 3, "name": "comida"}, {"id": 1}, {"id": 900}]
+        expense = {"amount": 1, "category": "comida", "date": "2026-04-03",
+                   "payment_method": None, "merchant": None, "description": "x", "confidence": 1}
+
+        save_expense(1, expense, 7, event_source="image_parser")
+
+        assert mock_cursor.execute.call_args_list[-1].args[1]["source"] == "image_parser"
 
     @patch("finance_tracker.storage.database.get_connection")
     def test_unknown_category_falls_back_to_otro(self, mock_get_conn):
         mock_cursor = _mock_connection(mock_get_conn)
-        mock_cursor.fetchone.side_effect = [{"id": 9, "name": "otro"}, {"id": 1}]
+        mock_cursor.fetchone.side_effect = [{"id": 9, "name": "otro"}, {"id": 1}, {"id": 900}]
         expense = {"amount": 5000, "category": "mascotas", "date": "2026-04-03",
                    "payment_method": None, "merchant": None, "description": "x", "confidence": 0.5}
 
@@ -107,7 +134,9 @@ class TestSaveExpense:
     def test_missing_otro_is_created_and_logged(self, mock_get_conn):
         mock_cursor = _mock_connection(mock_get_conn)
         # lookup → nothing; INSERT category RETURNING; INSERT expense RETURNING
-        mock_cursor.fetchone.side_effect = [None, {"id": 11, "name": "otro"}, {"id": 1}]
+        mock_cursor.fetchone.side_effect = [
+            None, {"id": 11, "name": "otro"}, {"id": 1}, {"id": 900}
+        ]
         expense = {"amount": 5000, "category": None, "date": "2026-04-03",
                    "payment_method": None, "merchant": None, "description": "x", "confidence": 0.5}
 
@@ -123,7 +152,7 @@ class TestSaveIncome:
     @patch("finance_tracker.storage.database.get_connection")
     def test_resolves_income_category(self, mock_get_conn):
         mock_cursor = _mock_connection(mock_get_conn)
-        mock_cursor.fetchone.side_effect = [{"id": 21, "name": "salario"}, {"id": 5}]
+        mock_cursor.fetchone.side_effect = [{"id": 21, "name": "salario"}, {"id": 5}, {"id": 901}]
         income = {"amount": 2000000, "category": "salario", "date": "2026-04-03",
                   "description": "pago", "confidence": 1.0}
 
@@ -131,6 +160,24 @@ class TestSaveIncome:
         _, lookup_params = mock_cursor.execute.call_args_list[0].args
         assert lookup_params["kind"] == "income"
         assert income["category_id"] == 21
+        event = mock_cursor.execute.call_args_list[-1].args[1]
+        assert (event["kind"], event["record_id"], event["action"]) == ("income", 5, "create")
+        assert event["source"] == "income_agent"
+        assert set(event["after"].adapted) == {
+            "amount", "currency", "category_id", "category", "date", "description"
+        }
+
+
+class TestGetIncomes:
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_live_incomes_with_current_category_name(self, mock_get_conn):
+        mock_cursor = _mock_connection(mock_get_conn)
+        mock_cursor.fetchall.return_value = [{"amount": 1, "category": "salario"}]
+
+        assert get_incomes(7, "2026-10-01", "2026-10-31") == [{"amount": 1, "category": "salario"}]
+        sql, params = mock_cursor.execute.call_args.args
+        assert "JOIN categories" in sql and "deleted_at IS NULL" in sql
+        assert params == {"user_id": 7, "min_date": "2026-10-01", "max_date": "2026-10-31"}
 
 
 class TestGetExpenses:

@@ -5,6 +5,7 @@
 
 -- ── RESET (run once to wipe everything) ─────────────────────────────────────────
 -- DROP TABLE IF EXISTS user_prefs CASCADE;
+-- DROP TABLE IF EXISTS record_events CASCADE;
 -- DROP TABLE IF EXISTS category_events CASCADE;
 -- DROP TABLE IF EXISTS budgets CASCADE;
 -- DROP TABLE IF EXISTS incomes CASCADE;
@@ -122,6 +123,25 @@ CREATE TABLE IF NOT EXISTS incomes (
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- ── record_events (append-only history of every expense/income change) ──────────
+-- One row per create, update, delete, undo or move (expense ↔ income); never updated or
+-- deleted. `before` / `after` hold the record's field values, so it's both the audit
+-- trail and what undo reverts to. created_at on expenses/incomes is never edited.
+-- Design: docs/design/phase-8-corrections.md.
+CREATE TABLE IF NOT EXISTS record_events (
+    id              SERIAL PRIMARY KEY,
+    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    record_kind     VARCHAR(10) NOT NULL,                 -- 'expense' | 'income'
+    record_id       INTEGER NOT NULL,
+    action          VARCHAR(20) NOT NULL,                 -- create | update | delete | undo | move
+    before          JSONB,                                -- NULL for create
+    after           JSONB,                                -- NULL for delete
+    message_id      INTEGER REFERENCES messages(id) ON DELETE SET NULL,  -- what caused it
+    related_event   INTEGER REFERENCES record_events(id), -- other half of a move / event an undo reverts
+    source          VARCHAR(20) NOT NULL,                 -- expense_agent | income_agent | image_parser | undo
+    created_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- ── budgets (per-currency; table created now, agent added in Phase 3) ─────────────
 CREATE TABLE IF NOT EXISTS budgets (
     id          SERIAL PRIMARY KEY,
@@ -141,6 +161,8 @@ CREATE INDEX IF NOT EXISTS idx_user_prefs_latest    ON user_prefs (user_id, crea
 CREATE INDEX IF NOT EXISTS idx_turns_user_created   ON conversation_turns (user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_categories_user      ON categories (user_id, kind);
 CREATE INDEX IF NOT EXISTS idx_category_events_user ON category_events (user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_record_events_record ON record_events (record_kind, record_id);
+CREATE INDEX IF NOT EXISTS idx_record_events_user   ON record_events (user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_expenses_user        ON expenses (user_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_message_id  ON expenses (message_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_date        ON expenses (expense_date);
