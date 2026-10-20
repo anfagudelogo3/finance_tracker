@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from finance_tracker.agents import users
+from finance_tracker.agents import pending, users
 from finance_tracker.config import (
     MSG_ACTION_CANCELLED,
     MSG_CATEGORY_DEACTIVATED,
@@ -71,6 +71,8 @@ def db():
         ) as overview,
         patch.object(users, "change_category") as change,
         patch.object(users, "append_user_prefs") as append,
+        # confirmations are stored and settled by agents/pending.py: same mock
+        patch.object(pending, "append_user_prefs", new=append),
         patch.object(
             users, "get_user_prefs", return_value={"default_currency": "COP"}
         ) as prefs,
@@ -294,12 +296,12 @@ class TestResolvePending:
         }
 
     def test_no_pending_is_a_noop(self, db):
-        assert users.resolve_pending(7, {}, "sí", NOW) == (None, {})
+        assert pending.resolve(7, {}, "sí", NOW) == (None, {})
         db.append.assert_not_called()
 
     def test_yes_applies_a_deactivation(self, db):
         prefs = self._prefs(tool="deactivate_category", kind="expense", name="comida")
-        reply, prefs = users.resolve_pending(7, prefs, "Sí", NOW)
+        reply, prefs = pending.resolve(7, prefs, "Sí", NOW)
         db.change.assert_called_once_with(7, "expense", "deactivate", "comida")
         assert reply == MSG_CATEGORY_DEACTIVATED.format(name="comida")
         assert prefs["pending_action"] is None
@@ -311,7 +313,7 @@ class TestResolvePending:
             name="comida",
             new_name="alimentación",
         )
-        reply, _ = users.resolve_pending(7, prefs, "1", NOW)
+        reply, _ = pending.resolve(7, prefs, "1", NOW)
         assert reply == MSG_CATEGORY_RENAMED.format(old="comida", name="alimentación")
 
     def test_yes_reports_a_merge(self, db):
@@ -320,13 +322,13 @@ class TestResolvePending:
         prefs = self._prefs(
             tool="rename_category", kind="expense", name="mercado", new_name="comida"
         )
-        reply, _ = users.resolve_pending(7, prefs, "dale", NOW)
+        reply, _ = pending.resolve(7, prefs, "dale", NOW)
         assert reply == MSG_CATEGORY_MERGED.format(
             old="mercado", name="comida", records=4
         )
 
     def test_yes_changes_the_currency(self, db):
-        reply, prefs = users.resolve_pending(
+        reply, prefs = pending.resolve(
             7, self._prefs(tool="set_default_currency", code="USD"), "si", NOW
         )
         assert reply == MSG_CURRENCY_CHANGED.format(code="USD")
@@ -337,7 +339,7 @@ class TestResolvePending:
         assert prefs["default_currency"] == "USD"
 
     def test_no_cancels(self, db):
-        reply, prefs = users.resolve_pending(
+        reply, prefs = pending.resolve(
             7, self._prefs(tool="set_default_currency", code="USD"), "no", NOW
         )
         assert reply == MSG_ACTION_CANCELLED
@@ -346,12 +348,12 @@ class TestResolvePending:
 
     def test_anything_else_cancels_and_is_routed(self, db):
         prefs = self._prefs(tool="deactivate_category", kind="expense", name="comida")
-        reply, prefs = users.resolve_pending(7, prefs, "almuerzo 20000", NOW)
+        reply, prefs = pending.resolve(7, prefs, "almuerzo 20000", NOW)
         assert reply is None and prefs["pending_action"] is None
         db.change.assert_not_called()
 
     def test_a_late_yes_does_not_confirm(self, db):
         prefs = self._prefs(tool="deactivate_category", kind="expense", name="comida")
-        reply, _ = users.resolve_pending(7, prefs, "sí", "2026-10-21T09:00:00-05:00")
+        reply, _ = pending.resolve(7, prefs, "sí", "2026-10-21T09:00:00-05:00")
         assert reply is None
         db.change.assert_not_called()

@@ -502,19 +502,26 @@ def find_replied_message(user_id: int, sid: str) -> dict | None:
 
 
 def get_message_records(user_id: int, message_id: int) -> list[dict]:
-    """The live expenses and incomes created from one inbound message, oldest first."""
+    """The live expenses and incomes one inbound message created or changed (a
+    correction: logged in record_events with that message_id), oldest first."""
     query = """
         SELECT 'expense' AS kind, e.id, e.amount, e.currency, c.name AS category,
                e.expense_date AS date, e.description
         FROM expenses e JOIN categories c ON c.id = e.category_id
-        WHERE e.user_id = %(user_id)s AND e.message_id = %(message_id)s
-          AND e.deleted_at IS NULL
+        WHERE e.user_id = %(user_id)s AND e.deleted_at IS NULL
+          AND (e.message_id = %(message_id)s OR e.id IN (
+                SELECT record_id FROM record_events
+                WHERE user_id = %(user_id)s AND record_kind = 'expense'
+                  AND message_id = %(message_id)s))
         UNION ALL
         SELECT 'income' AS kind, i.id, i.amount, i.currency, c.name AS category,
                i.income_date AS date, i.description
         FROM incomes i JOIN categories c ON c.id = i.category_id
-        WHERE i.user_id = %(user_id)s AND i.message_id = %(message_id)s
-          AND i.deleted_at IS NULL
+        WHERE i.user_id = %(user_id)s AND i.deleted_at IS NULL
+          AND (i.message_id = %(message_id)s OR i.id IN (
+                SELECT record_id FROM record_events
+                WHERE user_id = %(user_id)s AND record_kind = 'income'
+                  AND message_id = %(message_id)s))
         ORDER BY kind, id;
     """
     with get_connection() as conn:
@@ -741,6 +748,167 @@ def get_expenses(user_id: int, min_date: str, max_date: str) -> list[dict]:
                 len(rows), user_id, min_date, max_date,
             )
             return [dict(row) for row in rows]
+
+
+# ── Record corrections (Phase 8b) ────────────────────────────────────────────────
+#
+# Every query is scoped by user_id and only sees live rows (deleted_at IS NULL): a record
+# id coming from the model can never reach another user's data or a deleted record.
+# Every change is logged in record_events in the same transaction.
+
+_RECORD_SQL = {
+    "expense": {
+        "table": "expenses",
+        "date": "expense_date",
+        "extra": ", r.payment_method, r.merchant",
+        "editable": ("amount", "currency", "category", "date", "description",
+                     "payment_method", "merchant"),
+    },
+    "income": {
+        "table": "incomes",
+        "date": "income_date",
+        "extra": "",
+        "editable": ("amount", "currency", "category", "date", "description"),
+    },
+}
+
+
+def _select_records(kind: str) -> str:
+    sql = _RECORD_SQL[kind]
+    return f"""
+        SELECT r.id, r.amount, r.currency, r.category_id, c.name AS category,
+               r.{sql['date']} AS date, r.description{sql['extra']}, r.created_at
+        FROM {sql['table']} r JOIN categories c ON c.id = r.category_id
+        WHERE r.user_id = %(user_id)s AND r.deleted_at IS NULL
+    """
+
+
+def get_recent_records(
+    user_id: int, kind: str, since: str, until: str | None = None, limit: int = 200
+) -> list[dict]:
+    """The user's live records of `kind` dated from `since` (to `until`), most recently
+    created first — the candidates for "el último" or "el Uber de ayer"."""
+    query = _select_records(kind) + f"""
+          AND r.{_RECORD_SQL[kind]['date']} >= %(since)s
+          {"AND r." + _RECORD_SQL[kind]['date'] + " <= %(until)s" if until else ""}
+        ORDER BY r.created_at DESC, r.id DESC
+        LIMIT %(limit)s;
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, {"user_id": user_id, "since": since, "until": until,
+                                "limit": limit})
+            return [dict(row) for row in cur.fetchall()]
+
+
+def get_record(user_id: int, kind: str, record_id: int) -> dict | None:
+    """One live record of the user, or None."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(_select_records(kind) + " AND r.id = %(record_id)s;",
+                        {"user_id": user_id, "record_id": record_id})
+            row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def update_record(
+    user_id: int,
+    kind: str,
+    record_id: int,
+    changes: dict,
+    message_id: int | None,
+    source: str,
+) -> dict:
+    """Change fields of one live record and log an 'update' event. created_at is never
+    touched. `changes` uses the snapshot names (amount, currency, category, date,
+    description, payment_method, merchant); a category must be one of the user's
+    active categories of that kind. Returns {"before", "after"} snapshots. Raises
+    LookupError when the record isn't the user's or is deleted, ValueError for an
+    invalid change."""
+    sql = _RECORD_SQL[kind]
+    unknown = set(changes) - set(sql["editable"])
+    if unknown:
+        raise ValueError(f"fields that can't be changed on an {kind}: {sorted(unknown)}")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(_select_records(kind) + " AND r.id = %(record_id)s FOR UPDATE OF r;",
+                        {"user_id": user_id, "record_id": record_id})
+            row = cur.fetchone()
+            if row is None:
+                raise LookupError(f"{kind} #{record_id} not found")
+            before = _snapshot(kind, dict(row))
+            after = dict(before)
+
+            columns = {}
+            for field, value in changes.items():
+                if field == "category":
+                    cur.execute(
+                        """
+                        SELECT id, name FROM categories
+                        WHERE user_id = %(user_id)s AND kind = %(kind)s AND active = TRUE
+                          AND lower(name) = lower(%(name)s);
+                        """,
+                        {"user_id": user_id, "kind": kind, "name": value},
+                    )
+                    category = cur.fetchone()
+                    if category is None:
+                        raise ValueError(f"'{value}' is not one of the user's {kind} categories")
+                    columns["category_id"] = category["id"]
+                    after.update(category_id=category["id"], category=category["name"])
+                elif field == "amount":
+                    if float(value) <= 0:
+                        raise ValueError("amount must be positive")
+                    columns["amount"] = value
+                    after["amount"] = float(value)
+                elif field == "date":
+                    columns[sql["date"]] = value
+                    after["date"] = str(value)
+                else:
+                    columns[field] = value
+                    after[field] = value
+
+            if columns:
+                assignments = ", ".join(f"{column} = %({column})s" for column in columns)
+                cur.execute(
+                    f"UPDATE {sql['table']} SET {assignments} "
+                    "WHERE id = %(record_id)s AND user_id = %(user_id)s;",
+                    {**columns, "record_id": record_id, "user_id": user_id},
+                )
+                _log_record_event(
+                    cur, user_id, kind, record_id, "update", before=before, after=after,
+                    message_id=message_id, source=source,
+                )
+            conn.commit()
+    logger.info("Updated %s #%d for user=%d (%s)", kind, record_id, user_id, sorted(changes))
+    return {"before": before, "after": after}
+
+
+def delete_record(
+    user_id: int, kind: str, record_id: int, message_id: int | None, source: str
+) -> dict:
+    """Soft-delete one live record (deleted_at) and log a 'delete' event. Returns the
+    record's snapshot. Raises LookupError when it isn't the user's or is already gone."""
+    sql = _RECORD_SQL[kind]
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(_select_records(kind) + " AND r.id = %(record_id)s FOR UPDATE OF r;",
+                        {"user_id": user_id, "record_id": record_id})
+            row = cur.fetchone()
+            if row is None:
+                raise LookupError(f"{kind} #{record_id} not found")
+            before = _snapshot(kind, dict(row))
+            cur.execute(
+                f"UPDATE {sql['table']} SET deleted_at = NOW() "
+                "WHERE id = %(record_id)s AND user_id = %(user_id)s;",
+                {"record_id": record_id, "user_id": user_id},
+            )
+            _log_record_event(
+                cur, user_id, kind, record_id, "delete", before=before,
+                message_id=message_id, source=source,
+            )
+            conn.commit()
+    logger.info("Deleted %s #%d for user=%d", kind, record_id, user_id)
+    return before
 
 
 def get_incomes(user_id: int, min_date: str, max_date: str) -> list[dict]:

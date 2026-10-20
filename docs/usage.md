@@ -79,6 +79,24 @@ Send a photo (e.g. a receipt) and the image is read by a vision model, which ext
 expense(s) from it. A caption is used as extra context. Supported image types: JPEG, PNG,
 WebP.
 
+## Fixing or deleting a record
+
+Made a mistake? Tell the bot:
+
+- **Swipe-reply** to the confirmation (or to your own message) and write the fix:
+  *"eran 15000"*, *"cámbialo a transporte"*, *"eso fue ayer"*, *"eran dólares"*. The change
+  is applied right away and the bot shows what changed:
+  `✏️ Gasto actualizado: monto COP 25.000 → COP 15.000`.
+- **Without a swipe-reply**, describe it: *"el Uber de ayer fue 12000"*, *"el último ingreso
+  fue de 2.500.000"*. The bot finds the record and asks *"¿Es este? …"* before changing it.
+  If several records match, it asks which one.
+- **Deleting** always asks first: *"borra el último gasto"* → *"¿Borro este gasto? …"* →
+  *sí*. Records are never really erased (they're marked as deleted and kept in the
+  history), and deleting everything at once isn't allowed.
+
+Any field can change: amount, currency, category, date, description, payment method and
+merchant. The moment a record was first registered never changes.
+
 ## Asking for a report
 
 Send a message asking about your money and the bot replies with an in-chat summary:

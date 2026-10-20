@@ -243,3 +243,22 @@ MSG_FUTURE_INCOME = (
     "📅 No registré {currency} {amount} ({description}) porque la fecha {date} aún no llega. "
     "Si ya lo recibiste, dime cuándo."
 )
+
+# Record corrections (Phase 8b) — agents/records.py
+RECORD_AGENT_MAX_ITERATIONS = 4       # safeguard: find → update is two turns
+RECORD_AGENT_TIMEOUT_SECONDS = 8      # runs inside the router loop (12 s)
+CORRECTION_WINDOW_DAYS = 60           # "el Uber de ayer" searches this far back
+RECORD_FIELD_LABELS = {
+    "amount": "monto",
+    "currency": "moneda",
+    "category": "categoría",
+    "date": "fecha",
+    "description": "descripción",
+    "payment_method": "medio de pago",
+    "merchant": "comercio",
+}
+MSG_RECORD_CONFIRM_UPDATE = "¿Es este? {record}\n→ Lo cambio: {changes}\n\n1. Sí\n2. No"
+MSG_RECORD_CONFIRM_DELETE = "¿Borro este {label}? {record}\n\n1. Sí\n2. No"
+MSG_RECORD_UPDATED = "✏️ {Label} actualizado: {changes}\n{record}"
+MSG_RECORD_DELETED = "🗑️ {Label} borrado: {record}"
+MSG_RECORD_GONE = "No encontré ese registro: puede que ya lo hayas borrado o cambiado."

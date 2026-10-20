@@ -348,3 +348,15 @@ class TestScoreExpenseDate:
         actual = [{"amount": 10000, "date": "2026-10-21"}]
         assert score_expense(actual, {"count": 1, "expenses": [{"amount": 10000, "date": "2026-10-21"}]})["all_correct"]
         assert not score_expense(actual, {"count": 1, "expenses": [{"date": "2026-10-22"}]})["all_correct"]
+
+
+class TestCorrectionsDataset:
+    def test_shape(self):
+        path = Path(__file__).parents[1] / "evals" / "datasets" / "corrections.json"
+        cases = json.loads(path.read_text(encoding="utf-8"))
+        assert len({c["id"] for c in cases}) == len(cases)
+        for case in cases:
+            assert case["kind"] in {"expense", "income"}, case["id"]
+            assert case["expected"]["action"] in {"record", "update", "delete", "ask"}, case["id"]
+            if case["expected"]["action"] in {"update", "delete"}:
+                assert "record_id" in case["expected"]["args"], case["id"]

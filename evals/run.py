@@ -34,6 +34,10 @@ from finance_tracker.routing.fast_paths import (
 )
 from finance_tracker.routing import router_agent
 from finance_tracker.agents import users as users_agent
+from finance_tracker.agents import expenses as expenses_agent
+from finance_tracker.agents import incomes as incomes_agent
+from finance_tracker.agents import pending as pending_actions
+from finance_tracker.agents import records as records_module
 from finance_tracker.core.agent_types import AgentRequest, AgentResponse
 from finance_tracker.config import DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES, TIMEZONE
 from evals.scoring import score_expense, score_date_range, score_routing, score_users
@@ -88,6 +92,11 @@ THRESHOLDS: dict[str, dict[str, float]] = {
     "record_dates": {
         "overall": 0.90,
         "date": 0.90,
+    },
+    # Phase 8b. Provisional until the first live runs.
+    "corrections": {
+        "overall": 0.85,
+        "action": 0.90,
     },
     "parse_expense": {
         "overall": 0.85,
@@ -280,6 +289,7 @@ _ROUTING_TAG_METRICS = [
     "business",
     "users",
     "reply",
+    "correction",
 ]
 
 # Every route_message.json case carries a profile; the same text can route differently
@@ -488,6 +498,117 @@ def _run_users_agent() -> tuple[list[dict], dict]:
     return scores, metrics
 
 
+# corrections.json runs against these records, with today fixed (Thursday 2026-10-22).
+# `created` is the registration order: "el último" is the highest.
+_CORRECTIONS_NOW = "2026-10-22T09:00:00-05:00"
+_CORRECTION_RECORDS = {
+    "expense": [
+        # id, amount, category, date, description, merchant, created
+        (12, 25000, "comida", "2026-10-20", "almuerzo", None, 1),
+        (13, 18000, "comida", "2026-10-19", "almuerzo", None, 2),
+        (15, 22000, "comida", "2026-10-19", "almuerzo con amigos", None, 3),
+        (14, 14000, "transporte", "2026-10-21", "viaje en Uber", "Uber", 4),
+        (16, 120000, "mercado", "2026-10-21", "mercado", None, 5),
+    ],
+    "income": [
+        (31, 500000, "freelance", "2026-10-10", "pago de cliente", None, 1),
+        (30, 2000000, "salario", "2026-10-15", "quincena", None, 2),
+    ],
+}
+
+
+def _correction_rows(kind: str) -> list[dict]:
+    rows = [
+        {"id": i, "amount": float(a), "currency": "COP", "category_id": 1, "category": c,
+         "date": date.fromisoformat(d), "description": desc, "payment_method": None,
+         "merchant": m, "created_at": created}
+        for i, a, c, d, desc, m, created in _CORRECTION_RECORDS[kind]
+    ]
+    return sorted(rows, key=lambda r: r["created_at"], reverse=True)
+
+
+def _correction_decide(case: dict) -> dict:
+    """Live expense/income agent on one case, database stubbed: returns the first thing
+    it did or proposed — {action: record | update | delete | ask, args, confirmation}."""
+    kind = case["kind"]
+    rows = _correction_rows(kind)
+    by_id = {r["id"]: r for r in rows}
+    events: list[dict] = []
+
+    def update_record(user_id, k, record_id, changes, message_id, source):
+        events.append({"action": "update", "args": {"record_id": record_id, **changes},
+                       "confirmation": False})
+        before = {**by_id[record_id], "date": str(by_id[record_id]["date"])}
+        return {"before": before, "after": {**before, **changes}}
+
+    def delete_record(user_id, k, record_id, message_id, source):
+        events.append({"action": "delete", "args": {"record_id": record_id}, "confirmation": False})
+        return {**by_id[record_id], "date": str(by_id[record_id]["date"])}
+
+    def append_user_prefs(user_id, delta, source="manual", replace=False):
+        action = delta.get("pending_action")
+        if action:
+            events.append({
+                "action": action["tool"].removesuffix("_record"),
+                "args": {"record_id": action["record_id"], **action.get("changes", {})},
+                "confirmation": True,
+            })
+        return 1
+
+    def save(message_id, record, user_id, event_source=None):
+        events.append({"action": "record", "args": {}, "confirmation": False})
+        return 999
+
+    replied = None
+    if case.get("replied"):
+        replied = {"role": "assistant", "text": "💸 / 💰 confirmación", "date": None,
+                   "source": "database",
+                   "records": [{"kind": kind, "id": i, "amount": by_id[i]["amount"],
+                                "currency": "COP", "category": by_id[i]["category"],
+                                "date": str(by_id[i]["date"]),
+                                "description": by_id[i]["description"]}
+                               for i in case["replied"]]}
+    agent = expenses_agent if kind == "expense" else incomes_agent
+    categories = (DEFAULT_EXPENSE_CATEGORIES if kind == "expense" else DEFAULT_INCOME_CATEGORIES)
+    request = AgentRequest(
+        user_id=0, message_id=1, phone="+570000000000", text=case["input"], media=[],
+        message_type="text", now=_CORRECTIONS_NOW, conversation=[], replied_to=replied,
+    )
+    db = records_module.database
+    try:
+        with patch.object(db, "get_recent_records", return_value=rows), \
+                patch.object(db, "get_record", side_effect=lambda u, k, i: by_id.get(i)), \
+                patch.object(db, "update_record", side_effect=update_record), \
+                patch.object(db, "delete_record", side_effect=delete_record), \
+                patch.object(db, "get_user_categories", return_value=categories), \
+                patch.object(pending_actions, "append_user_prefs", side_effect=append_user_prefs), \
+                patch.object(agent, "get_user_categories", return_value=categories), \
+                patch.object(agent, f"save_{kind}", side_effect=save):
+            response = agent.handle(request)
+    except Exception as exc:  # an API error is a failed case, not a crashed run
+        return {"action": f"error:{type(exc).__name__}", "args": {}, "confirmation": False}
+    if events:
+        return events[0]
+    if response.ok and response.reply_text:
+        return {"action": "ask", "args": {}, "confirmation": False}
+    return {"action": "none", "args": {}, "confirmation": False}
+
+
+def _run_corrections() -> tuple[list[dict], dict]:
+    scores = []
+    for case in _load_dataset("corrections"):
+        score = score_users(_correction_decide(case), case["expected"])
+        score["id"] = case["id"]
+        scores.append(score)
+    n = len(scores)
+    metrics: dict[str, int | float] = {"n": n}
+    metrics["overall"] = sum(1 for s in scores if s["all_correct"]) / n
+    for field in ("action", "args", "confirmation"):
+        scored = [s for s in scores if field in s]
+        metrics[field] = sum(1 for s in scored if s[field]["correct"]) / len(scored)
+    return scores, metrics
+
+
 _WIDTH = 54
 
 
@@ -541,10 +662,10 @@ def main() -> None:
     )
     arg_parser.add_argument(
         "--only",
-        choices=["routing", "users", "records"],
+        choices=["routing", "users", "records", "corrections"],
         help=(
             "Run a single eval group (each needs only ANTHROPIC_API_KEY): routing, users, "
-            "or records (expense/income extraction and record dates)."
+            "records (expense/income extraction and record dates) or corrections."
         ),
     )
     args = arg_parser.parse_args()
@@ -564,6 +685,14 @@ def main() -> None:
         if setup_tracing():
             print("Phoenix tracing enabled.")
         _finish(_run_records_section(args.check))
+        return
+
+    if args.only == "corrections":
+        if not has_anthropic_key:
+            sys.exit("ANTHROPIC_API_KEY not configured. Add it to your .env file.")
+        if setup_tracing():
+            print("Phoenix tracing enabled.")
+        _finish(_run_corrections_section(args.check))
         return
 
     if args.only == "users":
@@ -599,6 +728,7 @@ def main() -> None:
 
     if has_anthropic_key:
         threshold_failures.extend(_run_records_section(args.check))
+        threshold_failures.extend(_run_corrections_section(args.check))
 
         print(
             "\nRunning reporting_agent (deterministic + Claude fallback) for parity..."
@@ -666,6 +796,13 @@ def _run_records_section(check: bool) -> list[str]:
     _print_section("record_dates", scores, metrics)
     failures += _check_thresholds("record_dates", metrics) if check else []
     return failures
+
+
+def _run_corrections_section(check: bool) -> list[str]:
+    print("\nRunning corrections (expense/income agents) on corrections.json, database stubbed...")
+    scores, metrics = _run_corrections()
+    _print_section("corrections", scores, metrics)
+    return _check_thresholds("corrections", metrics) if check else []
 
 
 def _run_users_section(check: bool) -> list[str]:

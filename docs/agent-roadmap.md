@@ -531,9 +531,10 @@ Scope and decisions: [design/phase-8-corrections.md](design/phase-8-corrections.
 - **Soft delete** (`deleted_at`) only. **Append-only `record_events`** log with before/after
   values for every create, edit, delete, undo and move: the audit trail and the basis of undo.
 - **Reports:** expenses, then incomes, then the net, per currency; Excel gets incomes.
-- Plain new records stay one Claude call (the loop ends in code after `record_*`).
-- **Delivery:** 8a edit log + reports with incomes (**built**); 8b edit and delete; 8c undo
-  and kind changes.
+- The agents' loop ends only when Claude ends its turn: a plain new record costs one
+  extra (short) closing call.
+- **Delivery:** 8a edit log + reports with incomes (**built**); 8b edit and delete
+  (**built**); 8c undo and kind changes.
 - **Evals:** `corrections.json` (action, target record, final values, confirmation asked);
   the skipped correction routing cases enabled.
 
