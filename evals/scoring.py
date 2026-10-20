@@ -60,7 +60,7 @@ def _score_single_expense(actual: dict, expected: dict) -> dict:
     fields: dict[str, dict] = {}
     all_correct = True
 
-    for field in ("amount", "currency", "category", "payment_method", "merchant"):
+    for field in ("amount", "currency", "category", "payment_method", "merchant", "date"):
         if field not in expected:
             continue
 

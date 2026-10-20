@@ -341,3 +341,10 @@ class TestUsersAgentDataset:
         for case in cases:
             assert case["expected"]["action"] in tools | {"none"}, case["id"]
             assert case["profile"]["type"] in {"personal", "business"}, case["id"]
+
+
+class TestScoreExpenseDate:
+    def test_date_is_scored_when_expected(self):
+        actual = [{"amount": 10000, "date": "2026-10-21"}]
+        assert score_expense(actual, {"count": 1, "expenses": [{"amount": 10000, "date": "2026-10-21"}]})["all_correct"]
+        assert not score_expense(actual, {"count": 1, "expenses": [{"date": "2026-10-22"}]})["all_correct"]
