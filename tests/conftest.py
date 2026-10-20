@@ -51,3 +51,11 @@ def _no_live_database(monkeypatch):
         raise AssertionError("Test opened a live database connection — mock it")
 
     monkeypatch.setattr(psycopg2, "connect", _blocked)
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "expects_error_path: the test deliberately makes the handler hit its catch-all "
+        "error path (see tests/test_handler.py::_no_hidden_errors)",
+    )

@@ -81,8 +81,9 @@ WebP.
 
 ## Asking for a report
 
-Send a message asking about your spending and the bot replies with an in-chat summary
-grouped by category (and by currency when more than one is present).
+Send a message asking about your money and the bot replies with an in-chat summary:
+expenses by category, then incomes by category, then the net (incomes − expenses). Each
+currency gets its own block; currencies are never added together.
 
 Examples that trigger a report:
 
@@ -109,9 +110,14 @@ Example reply:
 ```
 📊 Resumen 1 abr 2026 – 15 abr 2026:
 
+💸 Gastos
   comida: COP 240.000 (6 gastos)
   transporte: COP 58.000 (4 gastos)
-Total: COP 298.000 — 10 gastos
+  Total: COP 298.000 — 10 gastos
+💰 Ingresos
+  salario: COP 2.000.000 (1 ingreso)
+  Total: COP 2.000.000 — 1 ingreso
+📈 Neto: COP 1.702.000
 ```
 
 ## Exporting to Excel
@@ -123,8 +129,12 @@ Trigger words include: `excel`, `xlsx`, `exportar`, `exportame`, `descargar`,
 `hoja de cálculo`, `spreadsheet`. You can combine them with a date range the same way as
 reports, e.g. `exportame mis gastos de marzo`.
 
-The file contains one row per expense with columns: Amount, Currency, Category, Expense
-Date, Payment Method, Merchant, Description, Source.
+The file (`movimientos_<from>_<to>.xlsx`) has three sheets:
+
+- **Gastos** — one row per expense: Monto, Moneda, Categoría, Fecha, Medio de pago,
+  Comercio, Descripción, Origen.
+- **Ingresos** — one row per income: Monto, Moneda, Categoría, Fecha, Descripción, Origen.
+- **Resumen** — per currency: total expenses, total incomes and the net.
 
 > The download link is a presigned S3 URL valid for a short time, but Twilio fetches and
 > delivers the file to you immediately, so you receive it as a normal WhatsApp attachment.

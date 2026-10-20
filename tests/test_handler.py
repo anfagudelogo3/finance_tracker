@@ -8,6 +8,19 @@ from finance_tracker.config import MSG_ERROR
 
 
 @pytest.fixture(autouse=True)
+def _no_hidden_errors(request, caplog):
+    """The handler turns any exception into a friendly reply and a 200, so a test
+    whose mocks are incomplete can pass through the error path without noticing. Fail
+    such tests unless they're marked as expecting the error path."""
+    yield
+    if request.node.get_closest_marker("expects_error_path"):
+        return
+    assert "Unhandled error processing message" not in caplog.text, (
+        "the handler hit its error path — a collaborator isn't mocked"
+    )
+
+
+@pytest.fixture(autouse=True)
 def _no_user_prefs():
     """Every handler test runs as an onboarded personal-profile user unless it
     overrides this."""
@@ -137,10 +150,13 @@ class TestIncomeTextPath:
 
 
 class TestExcelBypassesOrchestrator:
+    @patch("finance_tracker.handler.send_message")
+    @patch("finance_tracker.handler.load_recent_turns", return_value=[])
     @patch("finance_tracker.handler.orchestrator")
     @patch("finance_tracker.handler.send_document")
     @patch("finance_tracker.handler.upload_and_sign")
     @patch("finance_tracker.handler.create_excel_bytes")
+    @patch("finance_tracker.handler.get_incomes", return_value=[])
     @patch("finance_tracker.handler.get_expenses")
     @patch("finance_tracker.handler.parse_report_request")
     @patch("finance_tracker.handler.save_turn")
@@ -155,10 +171,13 @@ class TestExcelBypassesOrchestrator:
         mock_save_turn,
         mock_parse_report,
         mock_get_expenses,
+        mock_get_incomes,
         mock_create_excel,
         mock_upload,
         mock_send_document,
         mock_orchestrator,
+        mock_load_recent_turns,
+        mock_send_message,
     ):
         mock_verify.return_value = True
         mock_get_user.return_value = 7
@@ -176,6 +195,10 @@ class TestExcelBypassesOrchestrator:
 
         assert result["statusCode"] == 200
         mock_orchestrator.handle_message.assert_not_called()
+        mock_send_message.assert_not_called()  # no error reply: the Excel path really ran
+        mock_get_incomes.assert_called_once_with(7, "2026-08-01", "2026-08-14")
+        mock_create_excel.assert_called_once_with([], [])
+        assert mock_send_document.call_args.args[2] == "movimientos_2026-08-01_2026-08-14.xlsx"
 
 
 class TestReportTextPath:
@@ -184,6 +207,7 @@ class TestReportTextPath:
     exercises the real deterministic date-range path end to end — "resumen de mis
     gastos" needs no Claude call at all."""
 
+    @patch("finance_tracker.agents.reporting.get_incomes", return_value=[])
     @patch("finance_tracker.agents.reporting.get_expenses")
     @patch("finance_tracker.handler.send_message")
     @patch("finance_tracker.handler.save_turn")
@@ -200,6 +224,7 @@ class TestReportTextPath:
         mock_save_turn,
         mock_send_message,
         mock_get_expenses,
+        mock_get_incomes,
     ):
         mock_verify.return_value = True
         mock_get_user.return_value = 7
@@ -214,10 +239,13 @@ class TestReportTextPath:
 
         assert result["statusCode"] == 200
         mock_get_expenses.assert_called_once()
+        mock_get_incomes.assert_called_once()
+        assert mock_send_message.call_args.args[1].startswith("📊 Resumen")
         mock_send_message.assert_called_once()
         assert mock_save_turn.call_count == 2  # inbound + outbound
 
 
+@pytest.mark.expects_error_path
 class TestErrorContract:
     @patch("finance_tracker.agents.expenses.get_user_categories")
     @patch("finance_tracker.agents.expenses.client")
@@ -255,6 +283,7 @@ class TestConversationHistoryWiring:
     """Direct test of the Phase 4 wiring itself, independent of any live Claude
     behavior — asserts load_recent_turns' output reaches AgentRequest.conversation."""
 
+    @patch("finance_tracker.handler.send_message")
     @patch("finance_tracker.handler.orchestrator")
     @patch("finance_tracker.handler.save_turn")
     @patch("finance_tracker.handler.load_recent_turns")
@@ -269,6 +298,7 @@ class TestConversationHistoryWiring:
         mock_load_recent_turns,
         mock_save_turn,
         mock_orchestrator,
+        mock_send_message,
     ):
         mock_verify.return_value = True
         mock_get_user.return_value = 7
