@@ -512,14 +512,30 @@ correct.
 
 ### Phase 8 — Conversational corrections
 
-- Edit, delete and undo for expenses and incomes on the last or a referenced record ("no, eran
-  15000", "borra el último", "deshaz eso"). These are new tools inside the expense and income
-  agents, which become multi-step and use `run_tool_loop`. They are not a new agent.
-- Soft delete via the existing `deleted_at` column. `get_expenses` and reporting must exclude
-  soft-deleted rows.
-- Reporting extended to incomes and net cashflow.
-- **Evals:** a correction/deletion dataset where the score checks which record changed and its
-  final values.
+Scope and decisions: [design/phase-8-corrections.md](design/phase-8-corrections.md).
+
+- **Edit, delete and undo** expenses and incomes from the chat, inside the expense and income
+  agents (each for its own records; not a new agent). Records are referenced by swipe-reply
+  (exact, via Phase 7a reply context), "the last one", or a description ("el Uber de ayer");
+  more than one match → ask.
+- **Every field** can change; `created_at` never does (audit). A **kind change** ("eso era
+  un ingreso") is a soft delete in one table plus a create in the other, linked in the log.
+- **Ask until sure:** an edit through a swipe-reply applies directly and shows what changed;
+  with "the last one" or a description the agent confirms the target record first.
+  **Deletes ask for confirmation; undo always clarifies first** (no fixed "how far back"
+  limit, and an undo can't be undone); **bulk deletes are declined**. A kind change needs no
+  confirmation when the record is exact. Confirmations reuse the Phase 6c `pending_action`
+  mechanism.
+- Description search covers the last 60 days; Excel gets an "Ingresos" sheet and a summary
+  with the net.
+- **Soft delete** (`deleted_at`) only. **Append-only `record_events`** log with before/after
+  values for every create, edit, delete, undo and move: the audit trail and the basis of undo.
+- **Reports:** expenses, then incomes, then the net, per currency; Excel gets incomes.
+- Plain new records stay one Claude call (the loop ends in code after `record_*`).
+- **Delivery:** 8a edit log + reports with incomes; 8b edit and delete; 8c undo and kind
+  changes.
+- **Evals:** `corrections.json` (action, target record, final values, confirmation asked);
+  the skipped correction routing cases enabled.
 
 ### Phase 9 — Channel abstraction
 
