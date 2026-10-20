@@ -508,3 +508,36 @@ class TestPendingConfirmationWiring:
 
         request = pipeline["orchestrator"].handle_message.call_args.args[0]
         assert request.default_currency == "EUR"  # the prefs returned by resolve_pending
+
+
+class TestReplyContextWiring:
+    def _not_onboarding(self, pipeline):
+        from finance_tracker.agents.onboarding import OnboardingOutcome
+
+        pipeline["onboarding"].handle.return_value = OnboardingOutcome(
+            replies=[], prefs={"onboarding": {"status": "done"}}, handled=False
+        )
+
+    def test_swipe_reply_context_reaches_the_agents(self, pipeline):
+        self._not_onboarding(pipeline)
+        replied = {"role": "assistant", "text": "💸 Gasto…", "date": None, "records": [], "source": "database"}
+        event = _make_event("eran 15000")
+        event["body"] += "&OriginalRepliedMessageSid=SMbot&OriginalRepliedMessageSender=whatsapp%3A%2B14155238886"
+
+        with patch("finance_tracker.handler.reply_context.resolve", return_value=replied) as resolve:
+            _handle_message(event)
+
+        assert resolve.call_args.args == (7, "+573001234567", "SMbot")
+        request = pipeline["orchestrator"].handle_message.call_args.args[0]
+        assert request.replied_to == replied
+
+    def test_outbound_turn_stores_sid_and_the_message_it_answers(self, pipeline):
+        self._not_onboarding(pipeline)
+        pipeline["send_message"].return_value = "SMout"
+
+        _handle_message(_make_event("nequi 50000"))
+
+        inbound, outbound = pipeline["save_turn"].call_args_list
+        assert inbound.kwargs == {"message_id": 55}
+        assert outbound.args[1] == "assistant"
+        assert outbound.kwargs == {"external_id": "SMout", "message_id": 55}

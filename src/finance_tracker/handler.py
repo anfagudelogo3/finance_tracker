@@ -29,6 +29,7 @@ from finance_tracker.routing.fast_paths import is_excel_request, fast_route
 from finance_tracker.core.agent_types import AgentRequest
 from finance_tracker.routing import orchestrator
 from finance_tracker.agents import onboarding, users
+from finance_tracker.channels.whatsapp import reply_context
 from finance_tracker.storage.excel import create_excel_bytes, upload_and_sign
 from finance_tracker.storage.database import (
     save_message,
@@ -90,15 +91,18 @@ def _parse_form_body(event: dict) -> dict:
     return {k: v[0] for k, v in parsed.items()}
 
 
-def _send(user_id: int, phone: str, text: str) -> None:
-    """Send one reply and record it as an assistant turn."""
+def _send(user_id: int, phone: str, text: str, message_id: int | None) -> None:
+    """Send one reply and record it as an assistant turn with its Twilio SID and the
+    inbound message it answers — what lets a later swipe-reply to it be resolved, down
+    to the records that message created."""
     message_sid = send_message(phone, text)
     logger.info("Reply sent, Twilio SID: %s", message_sid)
-    save_turn(user_id, "assistant", text)
+    save_turn(user_id, "assistant", text, external_id=message_sid, message_id=message_id)
 
 
 def _dispatch_and_reply(
-    user_id, phone, msg_type, agent_text, message_id, now, conversation, prefs
+    user_id, phone, msg_type, agent_text, message_id, now, conversation, prefs,
+    replied_to=None,
 ):
     """Build an AgentRequest, dispatch through the orchestrator, and send the reply.
 
@@ -116,18 +120,20 @@ def _dispatch_and_reply(
         conversation=conversation,
         profile=prefs.get("profile") or dict(DEFAULT_PROFILE),
         default_currency=prefs.get("default_currency") or DEFAULT_CURRENCY,
+        replied_to=replied_to,
     )
     agent_response = orchestrator.handle_message(agent_request)
-    _send(user_id, phone, agent_response.reply_text)
+    _send(user_id, phone, agent_response.reply_text, message_id)
     return {"statusCode": 200, "body": ""}
 
 
 def _route(
     user_id, phone, msg_type, text, message_id, now, conversation, prefs,
-    stored_media=(), caption="",
+    stored_media=(), caption="", replied_to=None,
 ):
     """Intent routing for one message (first match wins). Also used to replay the
-    message held during onboarding, with that message's own id and timestamp."""
+    message held during onboarding, with that message's own id and timestamp.
+    `replied_to` is the quoted message of a WhatsApp swipe-reply (or None)."""
     profile = prefs.get("profile") or dict(DEFAULT_PROFILE)
 
     # Excel export branch
@@ -147,12 +153,15 @@ def _route(
         )
         message_sid = send_document(phone, presigned_url, filename)
         logger.info("Excel sent, Twilio SID: %s", message_sid)
-        save_turn(user_id, "assistant", f"[excel] {filename}")
+        save_turn(
+            user_id, "assistant", f"[excel] {filename}",
+            external_id=message_sid, message_id=message_id,
+        )
         return {"statusCode": 200, "body": ""}
 
     # Report branch — only the narrowed fast path (personal profile, single intent);
     # anything else that looks like a report reaches the router via the orchestrator
-    if fast_route(text, profile, conversation) == "reporting":
+    if fast_route(text, profile, conversation, replied_to) == "reporting":
         logger.info("Report request detected from %s", phone)
         return _dispatch_and_reply(
             user_id, phone, msg_type, text, message_id, now, conversation, prefs
@@ -172,7 +181,7 @@ def _route(
 
         if not expenses:
             logger.info("No expenses parsed from message id=%d, sending fallback reply", message_id)
-            _send(user_id, phone, MSG_EMPTY_EXPENSE)
+            _send(user_id, phone, MSG_EMPTY_EXPENSE, message_id)
             return {"statusCode": 200, "body": ""}
 
         for expense in expenses:
@@ -183,12 +192,13 @@ def _route(
                 expense_id, expense.get("amount"), expense.get("category"), expense.get("confidence"),
             )
 
-        _send(user_id, phone, format_confirmation(expenses))
+        _send(user_id, phone, format_confirmation(expenses), message_id)
         return {"statusCode": 200, "body": ""}
 
     # Text / audio expense/income branch — dispatched via the orchestrator
     return _dispatch_and_reply(
-        user_id, phone, msg_type, text, message_id, now, conversation, prefs
+        user_id, phone, msg_type, text, message_id, now, conversation, prefs,
+        replied_to=replied_to,
     )
 
 
@@ -242,7 +252,10 @@ def _handle_message(event):
         prefs = get_user_prefs(user_id)
 
         # Record the inbound turn for short-term conversation memory
-        save_turn(user_id, "user", message["text"] or f"[{_get_message_type(message)}]")
+        save_turn(
+            user_id, "user", message["text"] or f"[{_get_message_type(message)}]",
+            message_id=message_id,
+        )
 
         # Store any media attachments to S3 and keep bytes for LLM processing
         stored_media = []
@@ -268,7 +281,7 @@ def _handle_message(event):
         outcome = onboarding.handle(user_id, prefs, text, msg_type, message_id, now)
         if outcome.handled:
             for reply in outcome.replies:
-                _send(user_id, message["phone"], reply)
+                _send(user_id, message["phone"], reply, message_id)
             if outcome.replay is None:
                 return {"statusCode": 200, "body": ""}
             held = outcome.replay
@@ -280,18 +293,32 @@ def _handle_message(event):
         # A settings change waiting for "sí" is settled before any routing (Phase 6c)
         reply, prefs = users.resolve_pending(user_id, outcome.prefs, text, now)
         if reply:
-            _send(user_id, message["phone"], reply)
+            _send(user_id, message["phone"], reply, message_id)
             return {"statusCode": 200, "body": ""}
+
+        # WhatsApp swipe-reply: what the quoted message was, and what it recorded (Phase 7a).
+        # Onboarding and pending confirmations above ignore it on purpose.
+        replied_to = reply_context.resolve(
+            user_id, message["phone"], message.get("replied_to_sid")
+        )
+        if replied_to:
+            logger.info(
+                "Reply to a %s message (source=%s, %d record(s))",
+                replied_to["role"], replied_to["source"], len(replied_to["records"]),
+            )
 
         return _route(
             user_id, message["phone"], msg_type, text, message_id, now, conversation,
             prefs, stored_media=stored_media, caption=message["text"],
+            replied_to=replied_to,
         )
 
     except Exception:
         logger.exception("Unhandled error processing message from %s", message["phone"])
         try:
-            send_message(message["phone"], MSG_ERROR)
+            error_sid = send_message(message["phone"], MSG_ERROR)
+            if "user_id" in locals():
+                save_turn(user_id, "assistant", MSG_ERROR, external_id=error_sid)
         except Exception:
             logger.exception("Failed to send error message to %s", message["phone"])
         return {"statusCode": 200, "body": ""}

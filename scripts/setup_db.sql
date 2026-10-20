@@ -47,12 +47,17 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at              TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- ── conversation_turns (short-term chatbot memory) ───────────────────────────────
+-- ── conversation_turns (short-term chatbot memory + reply context) ───────────────
+-- external_id: the Twilio SID of an outbound (assistant) message, so a WhatsApp swipe-reply
+-- to it can be resolved. message_id: the inbound message this turn is (user) or answers
+-- (assistant) — records carry the same message_id, which links a confirmation to its records.
 CREATE TABLE IF NOT EXISTS conversation_turns (
     id          SERIAL PRIMARY KEY,
     user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     role        VARCHAR(16) NOT NULL,          -- 'user' | 'assistant'
     content     TEXT NOT NULL,
+    external_id VARCHAR(64) UNIQUE,            -- Twilio SID of an outbound message
+    message_id  INTEGER REFERENCES messages(id) ON DELETE SET NULL,
     created_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

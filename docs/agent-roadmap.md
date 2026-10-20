@@ -486,6 +486,21 @@ Delivered as three PRs:
   currency and business details can be changed from chat and take effect on the next message;
   renames show up in past reports, deactivated categories stay in them.
 
+### Phase 7a — Reply context (WhatsApp swipe-replies)
+
+Design and decisions: [design/phase-7a-reply-context.md](design/phase-7a-reply-context.md).
+Done before Phase 8 because a swipe-reply is the most natural way to point at the record to
+correct.
+
+- Read `OriginalRepliedMessageSid` / `OriginalRepliedMessageSender`; resolve the quoted
+  message from our database (inbound by SID; outbound SIDs now stored in
+  `conversation_turns.external_id`), Twilio `fetch()` only as a fallback.
+- Deterministic link to records: bot turns store the inbound `message_id` they answered, and
+  records already carry `message_id`.
+- `AgentRequest.replied_to`, passed to the router as tagged data; fast paths skipped for
+  replies; onboarding and pending confirmations ignore it.
+- **Evals:** routing cases with `replied_to`.
+
 ### Phase 7 — Guardrails hardening
 
 - Adversarial and off-topic eval cases (prompt injection, "ignore previous instructions",

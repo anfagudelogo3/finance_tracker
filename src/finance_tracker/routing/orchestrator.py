@@ -16,7 +16,9 @@ def handle_message(request: AgentRequest) -> AgentResponse:
     a question, or on multi-intent / suspicious text — those always reach the router.
     handler.py's is_excel_request still runs before this is ever called.
     """
-    agent = fast_route(request.text, request.profile, request.conversation)
+    agent = fast_route(
+        request.text, request.profile, request.conversation, request.replied_to
+    )
     if agent:
         logger.info("Routing via fast path → %s", agent)
         agent_module = {

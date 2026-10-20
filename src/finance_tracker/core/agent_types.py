@@ -29,6 +29,9 @@ class AgentRequest:
     conversation: list[dict]
     profile: dict = field(default_factory=lambda: dict(DEFAULT_PROFILE))
     default_currency: str = DEFAULT_CURRENCY  # user_prefs → default_currency
+    # WhatsApp swipe-reply: the quoted message, {role, text, date, records, source}
+    # (channels/whatsapp/reply_context.py); None when the message isn't a reply
+    replied_to: dict | None = None
 
 
 @dataclass

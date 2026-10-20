@@ -229,3 +229,7 @@ MSG_CATEGORY_DEACTIVATED = (
     "✅ Desactivé la categoría *{name}*. Tus reportes anteriores la siguen mostrando."
 )
 MSG_CURRENCY_CHANGED = "✅ Tu moneda principal ahora es {code}."
+
+# Reply context (Phase 7a) — WhatsApp swipe-replies
+REPLIED_TO_MAX_CHARS = 400               # quoted text passed to the router (reports can be long)
+REPLIED_TO_FETCH_TIMEOUT_SECONDS = 3     # Twilio fallback when the SID isn't stored

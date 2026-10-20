@@ -528,5 +528,164 @@
     "expected": {"route": "decline", "agents": []},
     "tags": ["adversarial"],
     "notes": "Account deletion isn't supported; deleting a category is (users)"
+  },
+  {
+    "id": "reply-registralo",
+    "input": "regístralo",
+    "profile": {
+      "type": "personal"
+    },
+    "replied_to": {
+      "role": "user",
+      "text": "almuerzo con el equipo 85000",
+      "date": "2026-10-18T19:30:00-05:00",
+      "records": [],
+      "source": "database"
+    },
+    "expected": {
+      "route": "agents",
+      "agents": [
+        "expenses"
+      ]
+    },
+    "tags": [
+      "reply",
+      "follow-up"
+    ],
+    "notes": "Swipe-reply to the user's own earlier message, which recorded nothing"
+  },
+  {
+    "id": "reply-report-this-week",
+    "input": "¿y esta semana?",
+    "profile": {
+      "type": "personal"
+    },
+    "replied_to": {
+      "role": "assistant",
+      "text": "📊 Resumen 2026-10-01 a 2026-10-20\nCOP 1.250.000 en 23 gastos\n  comida: COP 480.000 (12 gastos)\n  transporte: COP 220.000 (6 gastos)",
+      "date": "2026-10-18T19:30:00-05:00",
+      "records": [],
+      "source": "database"
+    },
+    "expected": {
+      "route": "agents",
+      "agents": [
+        "reporting"
+      ]
+    },
+    "tags": [
+      "reply",
+      "follow-up"
+    ]
+  },
+  {
+    "id": "reply-answers-direction-question",
+    "input": "ingreso",
+    "profile": {
+      "type": "personal"
+    },
+    "replied_to": {
+      "role": "assistant",
+      "text": "¿Los COP 50.000 por nequi fueron un gasto o un ingreso?",
+      "date": "2026-10-18T19:30:00-05:00",
+      "records": [],
+      "source": "database"
+    },
+    "expected": {
+      "route": "agents",
+      "agents": [
+        "incomes"
+      ]
+    },
+    "tags": [
+      "reply",
+      "follow-up"
+    ],
+    "notes": "The question is older than the conversation window: only the reply carries it"
+  },
+  {
+    "id": "reply-amount-to-question",
+    "input": "35000",
+    "profile": {
+      "type": "personal"
+    },
+    "replied_to": {
+      "role": "assistant",
+      "text": "¿Cuánto costó el almuerzo?",
+      "date": "2026-10-18T19:30:00-05:00",
+      "records": [],
+      "source": "database"
+    },
+    "expected": {
+      "route": "agents",
+      "agents": [
+        "expenses"
+      ]
+    },
+    "tags": [
+      "reply",
+      "follow-up"
+    ]
+  },
+  {
+    "id": "reply-new-expense-on-old-report",
+    "input": "uber 12000",
+    "profile": {
+      "type": "personal"
+    },
+    "replied_to": {
+      "role": "assistant",
+      "text": "📊 Resumen 2026-10-01 a 2026-10-20\nCOP 1.250.000 en 23 gastos\n  comida: COP 480.000 (12 gastos)\n  transporte: COP 220.000 (6 gastos)",
+      "date": "2026-10-18T19:30:00-05:00",
+      "records": [],
+      "source": "database"
+    },
+    "expected": {
+      "route": "agents",
+      "agents": [
+        "expenses"
+      ]
+    },
+    "tags": [
+      "reply",
+      "single"
+    ],
+    "notes": "A new expense that happens to be sent as a reply: the quote doesn't change it"
+  },
+  {
+    "id": "reply-correction",
+    "input": "eran 15000",
+    "profile": {
+      "type": "personal"
+    },
+    "replied_to": {
+      "role": "assistant",
+      "text": "💸 Gasto registrado: COP 25.000 en comida (2026-10-18)",
+      "date": "2026-10-18T19:30:00-05:00",
+      "records": [
+        {
+          "kind": "expense",
+          "id": 12,
+          "amount": 25000.0,
+          "currency": "COP",
+          "category": "comida",
+          "date": "2026-10-18",
+          "description": "almuerzo"
+        }
+      ],
+      "source": "database"
+    },
+    "expected": {
+      "route": "agents",
+      "agents": [
+        "expenses"
+      ]
+    },
+    "tags": [
+      "reply",
+      "follow-up"
+    ],
+    "skip": "phase-8",
+    "notes": "Correction of the exact quoted record — needs Phase 8 edit support"
   }
 ]

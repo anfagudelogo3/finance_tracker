@@ -39,6 +39,9 @@ def extract_message(params: dict) -> dict | None:
       - media: list of dicts with 'url', 'content_type', 's3_prefix', 'ext'
                (empty list when NumMedia == 0)
 
+      - replied_to_sid: Twilio SID of the message this one swipe-replies to, or None
+      - replied_to_sender: who sent that message ('whatsapp:+…'), or None
+
     Returns None if required fields are missing.
     """
     from_number = params.get("From", "")
@@ -74,4 +77,7 @@ def extract_message(params: dict) -> dict | None:
         "text": body,
         "message_id": message_sid,
         "media": media,
+        # Swipe-reply: Twilio sends who/which message was quoted, not its content
+        "replied_to_sid": params.get("OriginalRepliedMessageSid") or None,
+        "replied_to_sender": params.get("OriginalRepliedMessageSender") or None,
     }

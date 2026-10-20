@@ -235,6 +235,7 @@ _ROUTING_TAG_METRICS = [
     "follow-up",
     "business",
     "users",
+    "reply",
 ]
 
 # Every route_message.json case carries a profile; the same text can route differently
@@ -336,6 +337,7 @@ def _router_route(case: dict) -> dict:
         now="2026-06-25T10:00:00-05:00",
         conversation=case.get("conversation", []),
         profile=case["profile"],
+        replied_to=case.get("replied_to"),
     )
     try:
         result = router_agent.route(request, _STUB_HANDLERS)
@@ -346,7 +348,9 @@ def _router_route(case: dict) -> dict:
 
 def _hybrid_route(case: dict) -> dict:
     """What production does (orchestrator.handle_message): fast path, else router."""
-    agent = fast_route(case["input"], case["profile"], case.get("conversation"))
+    agent = fast_route(
+        case["input"], case["profile"], case.get("conversation"), case.get("replied_to")
+    )
     if agent:
         return {"route": "agents", "agents": [agent], "via": "fast_path"}
     return _router_route(case)

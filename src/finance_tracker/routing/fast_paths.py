@@ -308,15 +308,20 @@ def _is_fast_report(normalized: str, tokens: list[str]) -> bool:
 
 
 def fast_route(
-    text: str, profile: dict | None, conversation: list[dict] | None = None
+    text: str,
+    profile: dict | None,
+    conversation: list[dict] | None = None,
+    replied_to: dict | None = None,
 ) -> str | None:
     """Return "reporting" | "incomes" | "expenses" when the message can skip the
     router, or None to send it to the router.
 
     Only for personal profiles: the keywords know nothing about a business ("almuerzo
     20 mil" can be a restaurant's sale), so every business message goes to the router.
+    Never for a WhatsApp swipe-reply: its meaning depends on the quoted message
+    ("200000" replying to "¿gasto o ingreso?").
     """
-    if (profile or {}).get("type", "personal") != "personal":
+    if (profile or {}).get("type", "personal") != "personal" or replied_to:
         return None
     if not text or _has_pending_question(conversation):
         return None

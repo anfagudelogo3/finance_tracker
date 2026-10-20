@@ -322,3 +322,23 @@ class TestUsersDelegation:
 
     def test_users_tool_is_offered_to_the_router(self):
         assert "delegate_to_users" in {t["name"] for t in router_agent.TOOLS}
+
+
+class TestRepliedTo:
+    def test_quoted_message_and_its_records_reach_the_router(self):
+        from dataclasses import replace
+
+        replied = {
+            "role": "assistant", "date": "2026-10-20T12:00:00-05:00", "source": "database",
+            "text": "💸 Gasto registrado: COP 25.000 en comida (2026-10-20)",
+            "records": [{"kind": "expense", "id": 12, "amount": 25000.0, "currency": "COP",
+                         "category": "comida", "date": "2026-10-20", "description": "almuerzo"}],
+        }
+        content = router_agent._user_content(replace(_request("eran 15000"), replied_to=replied))
+
+        assert '<replied_to role="assistant" date="2026-10-20T12:00:00-05:00">' in content
+        assert "record: expense #12 COP 25,000 comida 2026-10-20 almuerzo" in content
+        assert content.index("</replied_to>") < content.index("<message>eran 15000</message>")
+
+    def test_no_block_when_not_a_reply(self):
+        assert "<replied_to" not in router_agent._user_content(_request("hola"))

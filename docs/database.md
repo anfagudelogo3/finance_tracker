@@ -109,7 +109,16 @@ Short-term chatbot memory: the recent back-and-forth used to resolve follow-ups 
 | `user_id` | `INTEGER NOT NULL` | FK → `users(id)` `ON DELETE CASCADE` |
 | `role` | `VARCHAR(16) NOT NULL` | `user` or `assistant` |
 | `content` | `TEXT NOT NULL` | The message text |
+| `external_id` | `VARCHAR(64) UNIQUE` | Twilio SID of an outbound (`assistant`) message, so a WhatsApp swipe-reply to it can be resolved |
+| `message_id` | `INTEGER` | FK → `messages(id)` `ON DELETE SET NULL`. The inbound message this turn is (`user`) or answers (`assistant`); records carry the same `message_id`, so a bot confirmation links to its records |
 | `created_at` | `TIMESTAMPTZ` | Used for the time-window memory query |
+
+**Reply context (Phase 7a).** A swipe-reply arrives with only the quoted message's SID.
+`database.find_replied_message(user_id, sid)` looks it up among the user's `messages`
+(`whatsapp_message_id`), then the bot's `conversation_turns` (`external_id`), always scoped by
+`user_id`; `database.get_message_records(user_id, message_id)` returns the expenses and
+incomes that message created. See
+[design/phase-7a-reply-context.md](design/phase-7a-reply-context.md).
 
 How much history is loaded is controlled by `CONVERSATION_MAX_TURNS` (cap) and
 `CONVERSATION_WINDOW_MINUTES` (recency window) in [`config.py`](../src/finance_tracker/config.py).

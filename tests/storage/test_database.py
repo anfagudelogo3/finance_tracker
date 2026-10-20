@@ -12,6 +12,8 @@ from finance_tracker.storage.database import (
     change_category,
     get_category_overview,
     save_turn,
+    find_replied_message,
+    get_message_records,
     load_recent_turns,
     get_user_prefs,
     append_user_prefs,
@@ -379,3 +381,53 @@ class TestCategoryOverview:
         assert get_category_overview(7)[0]["records"] == 3
         sql = cur.execute.call_args.args[0]
         assert "FROM expenses" in sql and "FROM incomes" in sql and "deleted_at IS NULL" in sql
+
+
+class TestReplyContextQueries:
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_save_turn_stores_sid_and_message(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        save_turn(7, "assistant", "ok", external_id="SMbot", message_id=41)
+        params = cur.execute.call_args.args[1]
+        assert params["external_id"] == "SMbot" and params["message_id"] == 41
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_users_own_message_is_found_first(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        cur.fetchone.side_effect = [
+            {"message_id": 41, "raw_text": "", "transcript": "almuerzo veinte mil", "created_at": None}
+        ]
+
+        found = find_replied_message(7, "SMuser")
+
+        assert found == {"role": "user", "text": "almuerzo veinte mil", "created_at": None, "message_id": 41}
+        sql, params = cur.execute.call_args.args
+        assert "FROM messages" in sql and "user_id = %(user_id)s" in sql
+        assert params == {"user_id": 7, "sid": "SMuser"}
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_then_the_bots_turns(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        cur.fetchone.side_effect = [None, {"content": "💸 Gasto…", "created_at": None, "message_id": 41}]
+
+        found = find_replied_message(7, "SMbot")
+
+        assert found["role"] == "assistant" and found["message_id"] == 41
+        sql = cur.execute.call_args.args[0]
+        assert "FROM conversation_turns" in sql and "user_id = %(user_id)s" in sql
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_unknown_sid(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        cur.fetchone.side_effect = [None, None]
+        assert find_replied_message(7, "SMnone") is None
+
+    @patch("finance_tracker.storage.database.get_connection")
+    def test_records_of_a_message_cover_both_tables(self, mock_get_conn):
+        cur = _mock_connection(mock_get_conn)
+        cur.fetchall.return_value = [{"kind": "expense", "id": 1}, {"kind": "income", "id": 2}]
+
+        assert len(get_message_records(7, 41)) == 2
+        sql, params = cur.execute.call_args.args
+        assert "FROM expenses" in sql and "FROM incomes" in sql and "deleted_at IS NULL" in sql
+        assert params == {"user_id": 7, "message_id": 41}
